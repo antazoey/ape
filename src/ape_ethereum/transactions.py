@@ -20,27 +20,24 @@ from pydantic import BaseModel, Field, root_validator, validator
 from ape.api import ReceiptAPI, TransactionAPI
 from ape.contracts import ContractEvent
 from ape.exceptions import OutOfGasError, SignatureError, TransactionError
-from ape.types import (
-    AddressType,
-    CallTreeNode,
-    ContractLog,
-    ContractLogContainer,
-    Traceback,
-    TracebackItem,
-)
+from ape.types import CallTreeNode, ContractLog, ContractLogContainer, Traceback, TracebackItem
 from ape.utils import cached_property
 
 
 class _FunctionsLocations(dict):
     def add(self, contract_type: ContractType, src: Any, pc: int, pcmap: PCMap):
+        if not contract_type.ast:
+            return
+
         if contract_type.source_id not in self:
             self[contract_type.source_id] = {}
 
-        location = cast(Tuple[int, int, int, int], tuple(pcmap[pc]))
+        location = cast(Tuple[int, int, int, int], tuple(pcmap[pc] or []))
         if location not in self[contract_type.source_id]:
             function = contract_type.ast.get_defining_function(location)
-            offset, signature = _extract_signature(function, src, location)
-            self[contract_type.source_id][location] = (function, signature, offset)
+            if function:
+                offset, signature = _extract_signature(function, src, location)
+                self[contract_type.source_id][location] = (function, signature, offset)
 
     def contains(self, contract_type: ContractType) -> bool:
         return contract_type.source_id is not None and contract_type.source_id in self
@@ -223,9 +220,7 @@ class Receipt(ReceiptAPI):
             return tb
 
         # Perf: Cache contract types by encoded address.
-        contract_types: Dict[str, Tuple[AddressType, ContractType]] = {
-            self.receiver.lower(): (self.receiver, self.contract_type)
-        }
+        contract_types: Dict[str, ContractType] = {self.receiver.lower(): self.contract_type}
         call_stack: List[Optional[ContractType]] = [self.contract_type]
         source_paths: Dict[str, Optional[Path]] = {}
         signature = None
@@ -243,10 +238,15 @@ class Receipt(ReceiptAPI):
                 data = create_call_node_data(evm_frame)
                 address_key = data["address"].lower()
                 if address_key in contract_types:
-                    address, contract_type = contract_types[address_key]
+                    contract_type = contract_types[address_key]
                 else:
                     address = self.provider.network.ecosystem.decode_address(data["address"])
-                    contract_type = self.chain_manager.contracts.get(address)
+                    contract_t = self.chain_manager.contracts.get(address)
+                    if not contract_t:
+                        continue
+
+                    contract_types[address_key] = contract_t
+                    contract_type = contract_t
 
                 call_stack.append(contract_type)
                 continue
@@ -277,8 +277,6 @@ class Receipt(ReceiptAPI):
                     # Check if popped back to last call.
                     penultimate = call_stack[-2]
                     if penultimate:
-                        ct = penultimate
-                        pcmap = ct.pcmap
                         call_stack.pop()
                         continue
 
@@ -301,7 +299,7 @@ class Receipt(ReceiptAPI):
 
             src = sources[ct.source_id]
             function_locations.add(ct, src, frame.pc, pcmap)
-            location = cast(Tuple[int, int, int, int], tuple(pcmap[frame.pc]))
+            location: Tuple[int, int, int, int] = tuple(pcmap[frame.pc])  # type: ignore
 
             if "PUSH" in frame.op:
                 if frame.pc in pcmap:
