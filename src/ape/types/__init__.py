@@ -22,7 +22,7 @@ from pydantic import BaseModel, root_validator, validator
 from web3.types import FilterParams
 
 from ape.types.signatures import MessageSignature, SignableMessage, TransactionSignature
-from ape.types.trace import CallTreeNode, GasReport, TraceFrame
+from ape.types.trace import CallTreeNode, GasReport, Traceback, TracebackItem, TraceFrame
 from ape.utils.misc import to_int
 
 if TYPE_CHECKING:
@@ -302,6 +302,8 @@ __all__ = [
     "SignableMessage",
     "SnapshotID",
     "Source",
+    "Traceback",
+    "TracebackItem",
     "TraceFrame",
     "TransactionSignature",
 ]

@@ -1,6 +1,8 @@
 from fnmatch import fnmatch
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
+from ethpm_types import BaseModel
 from evm_trace.gas import merge_reports
 from pydantic import Field
 from rich.table import Table
@@ -219,3 +221,150 @@ class TraceFrame(BaseInterfaceModel):
     """
     The raw trace frame from the provider.
     """
+
+
+class Traceback(list):
+    """
+    A full execution traceback.
+    """
+
+    def __str__(self) -> str:
+        return self.format_exc()
+
+    def format_exc(self):
+        tb = "Traceback (most recent call last)"
+        last_src = None
+        last_closure = None
+        last_line_no = None
+        indent = "  "
+        for idx, stmt in enumerate(self):
+            if last_line_no is not None and last_line_no == stmt.end_lineno:
+                # Already covered from last statement.
+                continue
+
+            last_line_no = stmt.end_lineno
+            if last_src and stmt.source_path == last_src and stmt.closure_name == last_closure:
+                # Source path has not changed.
+                tb += f"\n{indent * 2}{stmt.format_exc()}"
+            else:
+                tb += f"\n{indent}{stmt.source_header}{stmt.format_exc()}"
+
+            last_src = stmt.source_path
+            last_closure = stmt.closure_name
+
+            if idx < len(self) - 1:
+                tb = f"{tb}\n"
+
+        return tb
+
+
+class TracebackItem(BaseModel):
+    """
+    An individual statement call in a traceback.
+    """
+
+    content: List[str]
+    """
+    The source line content.
+    """
+
+    closure_name: str
+    """
+    The enclosing name of the definition containing the lines,
+    such as the function or contract name.
+    """
+
+    source_path: Optional[Path]
+    """
+    The path to the local contract file.
+    Only exists when is from a local contract.
+    """
+
+    begin_lineno: Optional[int] = None
+    """
+    The start line number.
+    Only exists the node matches a visible statement in a source file.
+    """
+
+    def __str__(self) -> str:
+        return f"{self.source_header}\n{self.format_exc()}"
+
+    @property
+    def line_numbers(self) -> List[int]:
+        """
+        The list of all line numbers as part of this node.
+        """
+
+        if self.begin_lineno is None:
+            return []
+
+        elif self.end_lineno is None:
+            return [self.begin_lineno]
+
+        return list(range(self.begin_lineno, self.end_lineno + 1))
+
+    @property
+    def source_header(self) -> str:
+        return (
+            f"In {self.closure_name}"
+            if self.source_path is None
+            else f"File {self.source_path}, in {self.closure_name}"
+        ).rstrip()
+
+    @property
+    def end_lineno(self) -> Optional[int]:
+        """
+        The last line number.
+        Only exists when this node contains content and a beginning line number.
+        """
+
+        length = len(self.content)
+        return None if (self.begin_lineno is None or not length) else self.begin_lineno + length - 1
+
+    def extend(self, content: List[str], location: Tuple[int, int, int, int]):
+        """
+        Extend this node's content with other content that follows it directly.
+
+        Raises:
+            ValueError: When there is a gap in content.
+
+        Args:
+            content (List[str]): The content to add to this node.
+            location (Tuple[int, int, int, int]): The location of the content, in the form
+              (lineno, col_offset, end_lineno, end_coloffset).
+        """
+
+        start = (
+            max(location[0], self.end_lineno + 1) if self.end_lineno is not None else location[0]
+        )
+        end = location[0] + len(content) - 1
+        if end < start:
+            # No new lines.
+            return
+
+        elif start - end > 1:
+            raise ValueError(
+                "Cannot extend when gap in lines > 1. "
+                "If because of whitespace lines, must include it the given content."
+            )
+
+        content_start = len(content) - (end - start) - 1
+        new_lines = [x.rstrip() for x in content[content_start:]]
+        self.content.extend(new_lines)
+
+    def format_exc(self) -> str:
+        """
+        Format this trace node into a string presentable to the user.
+        """
+
+        content = ""
+        for idx, line in enumerate(self.content):
+            if self.begin_lineno is None:
+                lineno = ""
+            else:
+                lineno = str(self.begin_lineno + idx)
+                content = f"{content.rstrip()}\n"
+
+            content = f"{content}    {lineno} {line}"
+
+        return content

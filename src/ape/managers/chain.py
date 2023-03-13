@@ -33,6 +33,7 @@ from ape.types import (
     ContractFunctionPath,
     GasReport,
     SnapshotID,
+    Traceback,
 )
 from ape.utils import BaseInterfaceModel, TraceStyles, parse_gas_table, singledispatchmethod
 
@@ -1117,6 +1118,10 @@ class ReportManager(BaseManager):
         console = self._get_console(file)
         console.print(*tables)
         return True
+
+    def show_traceback(self, traceback: Traceback, file: Optional[IO[str]] = None):
+        console = self._get_console(file)
+        console.print(str(traceback))
 
     def append_gas(
         self,

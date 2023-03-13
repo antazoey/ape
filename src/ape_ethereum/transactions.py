@@ -1,6 +1,7 @@
 import sys
 from enum import Enum, IntEnum
-from typing import IO, Dict, List, Optional, Union
+from pathlib import Path
+from typing import IO, Any, Dict, List, Optional, Tuple, Union, cast
 
 from eth_abi import decode
 from eth_account import Account as EthAccount
@@ -9,15 +10,45 @@ from eth_account._utils.legacy_transactions import (
     serializable_unsigned_transaction_from_dict,
 )
 from eth_utils import decode_hex, encode_hex, keccak, to_hex, to_int
-from ethpm_types import HexBytes
+from ethpm_types import ASTNode, ContractType, HexBytes, PCMap, Source
 from ethpm_types.abi import EventABI, MethodABI
+from evm_trace.enums import CALL_OPCODES
+from evm_trace.geth import TraceFrame as EvmTraceFrame
+from evm_trace.geth import create_call_node_data
 from pydantic import BaseModel, Field, root_validator, validator
 
 from ape.api import ReceiptAPI, TransactionAPI
 from ape.contracts import ContractEvent
 from ape.exceptions import OutOfGasError, SignatureError, TransactionError
-from ape.types import CallTreeNode, ContractLog, ContractLogContainer
+from ape.types import (
+    AddressType,
+    CallTreeNode,
+    ContractLog,
+    ContractLogContainer,
+    Traceback,
+    TracebackItem,
+)
 from ape.utils import cached_property
+
+
+class _FunctionsLocations(dict):
+    def add(self, contract_type: ContractType, src: Any, pc: int, pcmap: PCMap):
+        if contract_type.source_id not in self:
+            self[contract_type.source_id] = {}
+
+        location = cast(Tuple[int, int, int, int], tuple(pcmap[pc]))
+        if location not in self[contract_type.source_id]:
+            function = contract_type.ast.get_defining_function(location)
+            offset, signature = _extract_signature(function, src, location)
+            self[contract_type.source_id][location] = (function, signature, offset)
+
+    def contains(self, contract_type: ContractType) -> bool:
+        return contract_type.source_id is not None and contract_type.source_id in self
+
+    def find(
+        self, contract_type: ContractType, location: Tuple[int, int, int, int]
+    ) -> Tuple[Dict, str, int]:
+        return self[contract_type.source_id][location]
 
 
 class TransactionStatusEnum(IntEnum):
@@ -158,16 +189,165 @@ class Receipt(ReceiptAPI):
         return self.provider.get_call_tree(self.txn_hash)
 
     @cached_property
+    def contract_type(self) -> Optional[ContractType]:
+        if not self.receiver:
+            return None
+
+        return self.chain_manager.contracts.get(self.receiver)
+
+    @cached_property
     def method_called(self) -> Optional[MethodABI]:
-        contract_type = self.chain_manager.contracts.get(self.receiver)
-        if not contract_type:
+        if not self.contract_type:
             return None
 
         method_id = self.data[:4]
-        if method_id not in contract_type.methods:
+        if method_id not in self.contract_type.methods:
             return None
 
-        return contract_type.methods[method_id]
+        return self.contract_type.methods[method_id]
+
+    @property
+    def traceback(self) -> Traceback:
+        tb = Traceback()
+        if (
+            not self.receiver
+            or not self.contract_type
+            or not self.contract_type.ast
+            or not self.contract_type.pcmap
+        ):
+            return tb
+
+        source_id = self.contract_type.source_id
+        sources = self.project_manager.sources
+        if not source_id or source_id not in sources:
+            return tb
+
+        # Perf: Cache contract types by encoded address.
+        contract_types: Dict[str, Tuple[AddressType, ContractType]] = {
+            self.receiver.lower(): (self.receiver, self.contract_type)
+        }
+        call_stack: List[Optional[ContractType]] = [self.contract_type]
+        source_paths: Dict[str, Optional[Path]] = {}
+        signature = None
+        content = None
+        function_locations = _FunctionsLocations()
+        call_ops = tuple([x.value for x in CALL_OPCODES])
+        last_op = None
+        push_src = None
+        function = None
+
+        for frame in self.trace:
+            if frame.op in call_ops:
+                # Change the active CALL.
+                evm_frame = EvmTraceFrame(**frame.raw)
+                data = create_call_node_data(evm_frame)
+                address_key = data["address"].lower()
+                if address_key in contract_types:
+                    address, contract_type = contract_types[address_key]
+                else:
+                    address = self.provider.network.ecosystem.decode_address(data["address"])
+                    contract_type = self.chain_manager.contracts.get(address)
+
+                call_stack.append(contract_type)
+                continue
+
+            ct = call_stack[-1]
+            if not ct or not ct.source_id:
+                continue
+
+            if ct.source_id in source_paths:
+                source_path = source_paths[ct.source_id]
+            else:
+                source_path = self.project_manager.lookup_path(str(ct.source_id))
+                source_paths[ct.source_id] = source_path
+
+            if not source_path or ct.source_id not in sources or not ct.ast or not ct.pcmap:
+                # Unknown.
+                continue
+
+            if frame.op == "SSTORE" and "PUSH" in str(last_op) and push_src:
+                pcmap = {frame.pc: push_src}
+            else:
+                pcmap = ct.pcmap
+
+            last_op = frame.op
+
+            if frame.pc not in pcmap or not pcmap[frame.pc]:
+                if frame.op == "POP" and len(call_stack) >= 2:
+                    # Check if popped back to last call.
+                    penultimate = call_stack[-2]
+                    if penultimate:
+                        ct = penultimate
+                        pcmap = ct.pcmap
+                        call_stack.pop()
+                        continue
+
+                elif (
+                    frame.op in ("REVERT", "RETURN") and function and tb[-1].end_lineno is not None
+                ):
+                    start = tb[-1].end_lineno
+                    stop = function.end_lineno
+                    if len(tb) and function and start < stop:
+                        # Add return statement.
+                        src = sources[ct.source_id]
+                        ret_stmt = src[start:stop]
+                        tb[-1].extend(ret_stmt, (start + 1, 0, stop, 0))
+
+                    continue
+
+                else:
+                    # Unknown.
+                    continue
+
+            src = sources[ct.source_id]
+            function_locations.add(ct, src, frame.pc, pcmap)
+            location = cast(Tuple[int, int, int, int], tuple(pcmap[frame.pc]))
+
+            if "PUSH" in frame.op:
+                if frame.pc in pcmap:
+                    push_src = pcmap[frame.pc]
+
+                continue
+
+            # Find defining function.
+            function, signature, offset = function_locations.find(ct, location)
+
+            # Find line content.
+            line_idx = max(location[0], offset) - 1
+            line_stop = location[2]
+
+            if line_stop < line_idx:
+                # Only signature lines.
+                continue
+
+            content = src[line_idx:line_stop]
+            if not content:
+                continue
+
+            if len(tb) and tb[-1].closure_name == signature:
+                # The function-called has not changed.
+                if tb[-1].end_lineno is not None and location[0] - tb[-1].end_lineno > 1:
+                    # Include whitespace.
+                    ws_start = tb[-1].end_lineno
+                    ws_end = location[0] - 1
+                    whitespace = src[ws_start:ws_end]
+                    content = [*whitespace, *content]
+                    location = (ws_start + 1, location[1], location[2], location[3])
+
+                # Append to last node since in the same call.
+                tb[-1].extend(content, location)
+
+            else:
+                # Fill out traceback item.
+                node = TracebackItem(
+                    content=content,
+                    source_path=source_path,
+                    closure_name=signature.rstrip(),
+                    begin_lineno=line_idx + 1,
+                )
+                tb.append(node)
+
+        return tb
 
     def raise_for_status(self):
         if self.gas_limit is not None and self.ran_out_of_gas:
@@ -229,6 +409,9 @@ class Receipt(ReceiptAPI):
         self.chain_manager._reports.show_gas(
             call_tree, sender=self.sender, transaction_hash=self.txn_hash
         )
+
+    def show_traceback(self, file: IO[str] = sys.stdout):
+        self.chain_manager._reports.show_traceback(self.traceback, file=file)
 
     def decode_logs(
         self,
@@ -311,3 +494,25 @@ class Receipt(ReceiptAPI):
             transaction_hash=log["transactionHash"],
             transaction_index=log["transactionIndex"],
         )
+
+
+def _get_ext(source_id: str) -> str:
+    return f".{source_id.split('.')[-1]}"
+
+
+def _extract_signature(
+    function: ASTNode, src: Source, loc: Tuple[int, int, int, int]
+) -> Tuple[int, str]:
+    start = function.lineno - 1
+    end = function.end_lineno
+    lines = src[start:end]
+
+    # Find the line number of the first statement of the function.
+    first_stmt_line_no = function.lineno + 1
+    for child in function.children:
+        if child.lineno > function.lineno and child.lineno < first_stmt_line_no:
+            first_stmt_line_no = child.lineno
+
+    offset = first_stmt_line_no - start - 1
+    definition = lines[:offset]
+    return first_stmt_line_no, " ".join([x.rstrip() for x in definition])

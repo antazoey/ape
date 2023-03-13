@@ -82,6 +82,16 @@ def geth_receipt(contract_for_trace, owner, geth_provider):
     return contract_for_trace.methodWithoutArguments(sender=owner)
 
 
+@pytest.fixture
+def geth_vyper_contract(owner, vyper_contract_container, geth_provider):
+    return owner.deploy(vyper_contract_container, 0)
+
+
+@pytest.fixture
+def geth_vyper_receipt(geth_vyper_contract, owner):
+    return geth_vyper_contract.setNumber(44, sender=owner)
+
+
 @geth_process_test
 def test_uri(geth_provider):
     assert geth_provider.uri == GETH_URI
@@ -99,38 +109,31 @@ def test_uri_uses_value_from_config(geth_provider, temp_config):
         geth_provider.provider_settings = settings
 
 
-def test_tx_revert(accounts, sender, vyper_contract_container):
+def test_tx_revert(accounts, sender, geth_vyper_contract, owner):
     # 'sender' is not the owner so it will revert (with a message)
-    contract = accounts.test_accounts[-1].deploy(vyper_contract_container, 0)
     with pytest.raises(ContractLogicError, match="!authorized"):
-        contract.setNumber(5, sender=sender)
+        geth_vyper_contract.setNumber(5, sender=sender)
 
 
-def test_revert_no_message(accounts, vyper_contract_container):
+def test_revert_no_message(accounts, geth_vyper_contract, owner):
     # The Contract raises empty revert when setting number to 5.
     expected = "Transaction failed."  # Default message
-    owner = accounts.test_accounts[-2]
-    contract = owner.deploy(vyper_contract_container, 0)
     with pytest.raises(ContractLogicError, match=expected):
-        contract.setNumber(5, sender=owner)
+        geth_vyper_contract.setNumber(5, sender=owner)
 
 
 @geth_process_test
-def test_contract_interaction(geth_provider, vyper_contract_container, accounts):
-    owner = accounts.test_accounts[-2]
-    contract = owner.deploy(vyper_contract_container, 0)
-    contract.setNumber(102, sender=owner)
-    assert contract.myNumber() == 102
+def test_contract_interaction(owner, geth_vyper_contract):
+    geth_vyper_contract.setNumber(102, sender=owner)
+    assert geth_vyper_contract.myNumber() == 102
 
 
 @geth_process_test
-def test_get_call_tree(geth_provider, vyper_contract_container, accounts):
-    owner = accounts.test_accounts[-3]
-    contract = owner.deploy(vyper_contract_container, 0)
-    receipt = contract.setNumber(10, sender=owner)
+def test_get_call_tree(geth_vyper_contract, owner, geth_provider):
+    receipt = geth_vyper_contract.setNumber(10, sender=owner)
     result = geth_provider.get_call_tree(receipt.txn_hash)
     expected = (
-        rf"{contract.address}.0x3fb5c1cb"
+        rf"{geth_vyper_contract.address}.0x3fb5c1cb"
         r"\(0x000000000000000000000000000000000000000000000000000000000000000a\) \[\d+ gas\]"
     )
     actual = repr(result)
@@ -162,13 +165,11 @@ def test_repr_on_live_network_and_disconnected(networks):
 
 
 @geth_process_test
-def test_get_logs(geth_provider, accounts, vyper_contract_container):
-    owner = accounts.test_accounts[-4]
-    contract = owner.deploy(vyper_contract_container, 0)
-    contract.setNumber(101010, sender=owner)
-    actual = contract.NumberChange[-1]
+def test_get_logs(geth_vyper_contract, owner):
+    geth_vyper_contract.setNumber(101010, sender=owner)
+    actual = geth_vyper_contract.NumberChange[-1]
     assert actual.event_name == "NumberChange"
-    assert actual.contract_address == contract.address
+    assert actual.contract_address == geth_vyper_contract.address
     assert actual.event_arguments["newNum"] == 101010
 
 
@@ -348,3 +349,18 @@ def assert_rich_output(rich_capture: List[str], expected: str):
     if expected_len > actual_len:
         rest = "\n".join(expected_lines[actual_len:])
         pytest.fail(f"Missing expected lines: {rest}")
+
+
+def test_traceback(geth_vyper_receipt, project_with_source_files_contract):
+    actual = geth_vyper_receipt.traceback
+    base_folder = project_with_source_files_contract.contracts_folder
+    expected = rf"""
+Traceback (most recent call last)
+  File {base_folder}/TestContractVy.vy, in def setNumber(num: uint256):
+    62     assert msg.sender == self.owner, "!authorized"
+    63     assert num != 5
+    64     self.prevNumber = self.myNumber
+    65     self.myNumber = num
+    66     log NumberChange(block.prevhash, self.prevNumber, "Dynamic", num, "Dynamic")
+""".strip()
+    assert str(actual) == expected
