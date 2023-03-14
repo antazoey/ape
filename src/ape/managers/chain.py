@@ -1119,7 +1119,7 @@ class ReportManager(BaseManager):
         console.print(*tables)
         return True
 
-    def show_traceback(self, traceback: Traceback, file: Optional[IO[str]] = None):
+    def show_source_traceback(self, traceback: Traceback, file: Optional[IO[str]] = None):
         console = self._get_console(file)
         console.print(str(traceback))
 

@@ -408,8 +408,8 @@ class Receipt(ReceiptAPI):
             call_tree, sender=self.sender, transaction_hash=self.txn_hash
         )
 
-    def show_traceback(self, file: IO[str] = sys.stdout):
-        self.chain_manager._reports.show_traceback(self.traceback, file=file)
+    def show_source_traceback(self, file: IO[str] = sys.stdout):
+        self.chain_manager._reports.show_source_traceback(self.traceback, file=file)
 
     def decode_logs(
         self,

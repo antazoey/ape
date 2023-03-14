@@ -414,7 +414,7 @@ class ReceiptAPI(BaseInterfaceModel):
         """
 
     @raises_not_implemented
-    def show_traceback(self):
+    def show_source_traceback(self):
         """
         Show a receipt traceback mapping to lines in the source code.
         Only works when the contract type and source code are both available,
