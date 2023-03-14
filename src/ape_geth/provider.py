@@ -152,7 +152,7 @@ class GethDevProcess(LoggingMixin, BaseGethProcess):
         self._clean()
 
     def _clean(self):
-        if self.data_dir.exists():
+        if self.data_dir.is_dir():
             shutil.rmtree(self.data_dir)
 
 

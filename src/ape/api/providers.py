@@ -1040,7 +1040,6 @@ class Web3Provider(ProviderAPI, ABC):
         return txn
 
     def send_transaction(self, txn: TransactionAPI) -> ReceiptAPI:
-
         try:
             if txn.signature or not txn.sender:
                 txn_hash = self.web3.eth.send_raw_transaction(txn.serialize_transaction())
@@ -1151,7 +1150,7 @@ class Web3Provider(ProviderAPI, ABC):
             message = str(exception).split(":")[-1].strip()
             if message == "execution reverted":
                 # Reverted without an error message
-                raise ContractLogicError(txn=txn)
+                return ContractLogicError(txn=txn)
 
             return ContractLogicError(revert_message=message, txn=txn)
 

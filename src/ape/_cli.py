@@ -8,7 +8,7 @@ import importlib_metadata as metadata
 import yaml
 
 from ape.cli import Abort, ape_cli_context
-from ape.exceptions import ApeException
+from ape.exceptions import ApeException, ContractLogicError
 from ape.logging import LogLevel, logger
 from ape.plugins import clean_plugin_name
 
@@ -28,6 +28,16 @@ def display_config(ctx, param, value):
     ctx.exit()  # NOTE: Must exit to bypass running ApeCLI
 
 
+def abort(err: ApeException) -> Abort:
+    if logger.level == LogLevel.DEBUG.value:
+        tb = traceback.format_exc()
+        err_message = tb or str(err)
+    else:
+        err_message = str(err)
+
+    return Abort(f"({type(err).__name__}) {err_message}")
+
+
 class ApeCLI(click.MultiCommand):
     _commands = None
 
@@ -36,14 +46,19 @@ class ApeCLI(click.MultiCommand):
             return super().invoke(ctx)
         except click.UsageError as err:
             self._suggest_cmd(err)
-        except ApeException as err:
-            if logger.level == LogLevel.DEBUG.value:
-                tb = traceback.format_exc()
-                err_message = tb or str(err)
-            else:
-                err_message = str(err)
+        except ContractLogicError as err:
+            # Show source lines.
+            chain = ctx.obj.chain_manager
+            chain_id = err.txn.chain_id
+            history = chain.get_history(chain_id)
+            txn_hash = err.txn.txn_hash.hex()
+            receipt = history[txn_hash]
+            ape_tb = receipt.traceback
+            ape_tb.rewrite_traceback_stack()
+            raise  # Same err, new stacktrace
 
-            raise Abort(f"({type(err).__name__}) {err_message}") from err
+        except ApeException as err:
+            raise abort(err) from err
 
     @staticmethod
     def _suggest_cmd(usage_error):
