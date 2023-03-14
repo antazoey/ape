@@ -351,16 +351,42 @@ def assert_rich_output(rich_capture: List[str], expected: str):
         pytest.fail(f"Missing expected lines: {rest}")
 
 
-def test_traceback(geth_vyper_receipt, project_with_source_files_contract):
-    actual = geth_vyper_receipt.traceback
+def test_traceback(owner, project_with_source_files_contract, geth_provider):
+    project = project_with_source_files_contract
+    registry = owner.deploy(project.Registry)
+    contract = owner.deploy(project.TracebackContract, registry)
+    receipt = contract.addBalance(123, sender=owner)
+    actual = receipt.traceback
     base_folder = project_with_source_files_contract.contracts_folder
     expected = rf"""
 Traceback (most recent call last)
-  File {base_folder}/TestContractVy.vy, in def setNumber(num: uint256):
-    62     assert msg.sender == self.owner, "!authorized"
-    63     assert num != 5
-    64     self.prevNumber = self.myNumber
-    65     self.myNumber = num
-    66     log NumberChange(block.prevhash, self.prevNumber, "Dynamic", num, "Dynamic")
+  File {base_folder}/TracebackContract.vy, in def addBalance(num: uint256) -> uint256:
+    18     assert num != self._balance
+    19     self.registry.register(msg.sender)
+
+  File {base_folder}/Registry.vy, in def register(addr: address):
+    7     self.addr = addr
+
+  File {base_folder}/TracebackContract.vy, in def addBalance(num: uint256) -> uint256:
+    20     self._balance = self._balance + self.addInterest(num)
+
+  File {base_folder}/TracebackContract.vy, in def addInterest(num: uint256) -> uint256:
+    38     return 123 + num
+
+  File {base_folder}/TracebackContract.vy, in def addBalance(num: uint256) -> uint256:
+    20     self._balance = self._balance + self.addInterest(num)
+    21
+    22     # Run some loops.
+    23     for i in [1, 2, 3, 4, 5]:
+    24         if i == num:
+    25             break
+    26
+    27     # Comments in the middle (is a test)
+    28
+    29     for i in [1, 2, 3, 4, 5]:
+    30         if i != num:
+    31             continue
+    32
+    33     return self._balance
 """.strip()
     assert str(actual) == expected
