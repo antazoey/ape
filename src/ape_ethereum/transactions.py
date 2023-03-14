@@ -505,12 +505,19 @@ def _extract_signature(
     end = function.end_lineno
     lines = src[start:end]
 
-    # Find the line number of the first statement of the function.
-    first_stmt_line_no = function.lineno + 1
+    first_stmt_line_no = None
     for child in function.children:
-        if child.lineno > function.lineno and child.lineno < first_stmt_line_no:
+        if (
+            child.lineno > function.lineno
+            and child.ast_type not in ("arguments", "Name")
+            and (first_stmt_line_no is None or child.lineno < first_stmt_line_no)
+        ):
             first_stmt_line_no = child.lineno
+
+    if first_stmt_line_no is None:
+        # Shouldn't happen, but just in case, use only the first line.
+        first_stmt_line_no = function.lineno + 1
 
     offset = first_stmt_line_no - start - 1
     definition = lines[:offset]
-    return first_stmt_line_no, " ".join([x.rstrip() for x in definition])
+    return first_stmt_line_no, "".join([x.strip() for x in definition])
