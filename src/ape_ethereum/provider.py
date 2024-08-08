@@ -576,6 +576,12 @@ class Web3Provider(ProviderAPI, ABC):
         if "error" in result:
             raise ProviderError(result["error"]["message"])
 
+        elif isinstance(result, dict):
+            if res := result.get("result"):
+                result = res
+            else:
+                raise ProviderError(f"Unhandled result: {result} from eth_call")
+
         return HexBytes(result)
 
     def _prepare_call(self, txn: Union[dict, TransactionAPI], **kwargs) -> list:
