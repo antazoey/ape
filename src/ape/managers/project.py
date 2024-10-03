@@ -626,15 +626,41 @@ class Dependency(BaseManager, ExtraAttributesMixin):
 
     @property
     def project_path(self) -> Path:
+        """
+        The path to the dependency's project root. When installing, this
+        is where the project files go.
+        """
         return self._cache.get_project_path(self.package_id, self.version)
 
     @property
     def manifest_path(self) -> Path:
+        """
+        The path to the dependency's manifest. When compiling, the artifacts go here.
+        """
         return self._cache.get_manifest_path(self.package_id, self.version)
 
     @property
     def api_path(self) -> Path:
+        """
+        The path to the dependency's API data-file. This data is necessary
+        for managing the install of the dependency.
+        """
         return self._cache.get_api_path(self.package_id, self.version)
+
+    @property
+    def installed(self) -> bool:
+        """
+        ``True`` when a project is available. Note: Installed does not mean
+        the dependency is compiled!
+        """
+        if self._installation is not None:
+            return True
+
+        elif self.project_path.is_dir():
+            if any(x for x in self.project_path.iterdir() if not x.name.startswith(".")):
+                return True
+
+        return False
 
     @property
     def uri(self) -> str:
@@ -667,7 +693,11 @@ class Dependency(BaseManager, ExtraAttributesMixin):
 
             return self._installation
 
-        elif (not self.project_path.is_dir()) or not use_cache:
+        elif (
+            not self.project_path.is_dir()
+            or len([x for x in self.project_path.iterdir() if not x.name.startswith(".")]) == 0
+            or not use_cache
+        ):
             unpacked = False
             if use_cache and self.manifest_path.is_file():
                 # Attempt using sources from manifest. This may happen
@@ -749,7 +779,7 @@ class Dependency(BaseManager, ExtraAttributesMixin):
         # Also, install dependencies of dependencies, if fetching for the
         # first time.
         if did_fetch:
-            spec = project.dependencies._get_specified(use_cache=use_cache)
+            spec = project.dependencies.get_project_dependencies(use_cache=use_cache)
             list(spec)
 
         return project
@@ -1083,7 +1113,7 @@ class DependencyManager(BaseManager):
         result = DependencyVersionMap(name)
 
         # Always ensure the specified are included, even if not yet installed.
-        if versions := {d.version: d.project for d in self._get_specified(name=name)}:
+        if versions := {d.version: d.project for d in self.get_project_dependencies(name=name)}:
             result.extend(versions)
 
         # Add remaining installed versions.
@@ -1132,7 +1162,12 @@ class DependencyManager(BaseManager):
 
         for _, (config_key, dependency_class) in self.plugin_manager.dependencies:
             assert issubclass(dependency_class, DependencyAPI)  # For mypy
-            dependency_classes[config_key] = dependency_class
+            if isinstance(config_key, tuple):
+                for sub_key in config_key:
+                    dependency_classes[sub_key] = dependency_class
+            else:
+                # Single str-given.
+                dependency_classes[config_key] = dependency_class
 
         return dependency_classes
 
@@ -1141,15 +1176,32 @@ class DependencyManager(BaseManager):
         """
         All dependencies specified in the config.
         """
-        yield from self._get_specified()
+        yield from self.get_project_dependencies()
 
-    def _get_specified(
+    def get_project_dependencies(
         self,
         use_cache: bool = True,
         config_override: Optional[dict] = None,
         name: Optional[str] = None,
         version: Optional[str] = None,
+        allow_install: bool = True,
     ) -> Iterator[Dependency]:
+        """
+        Get dependencies specified in the project's ``ape-config.yaml`` file.
+
+        Args:
+            use_cache (bool): Set to ``False`` to force-reinstall dependencies.
+               Defaults to ``True``. Does not work with ``allow_install=False``.
+            config_override (Optional[dict]): Override shared configuration for each dependency.
+            name (Optional[str]): Optionally only get dependencies with a certain name.
+            version (Optional[str]): Optionally only get dependencies with certain version.
+            allow_install (bool): Set to ``False`` to not allow installing uninstalled
+              specified dependencies.
+
+        Returns:
+            Iterator[:class:`~ape.managers.project.Dependency`]
+        """
+
         for api in self.config_apis:
             if (name is not None and api.name != name and api.package_id != name) or (
                 version is not None and api.version_id != version
@@ -1159,14 +1211,15 @@ class DependencyManager(BaseManager):
             # Ensure the dependency API data is known.
             dependency = self.add(api)
 
-            try:
-                dependency.install(use_cache=use_cache, config_override=config_override)
-            except ProjectError:
-                # This dependency has issues. Let's wait to until the user
-                # actually requests something before failing, and
-                # yield an uninstalled version of the specified dependency for
-                # them to fix.
-                pass
+            if allow_install:
+                try:
+                    dependency.install(use_cache=use_cache, config_override=config_override)
+                except ProjectError:
+                    # This dependency has issues. Let's wait to until the user
+                    # actually requests something before failing, and
+                    # yield an uninstalled version of the specified dependency for
+                    # them to fix.
+                    pass
 
             yield dependency
 
@@ -1284,7 +1337,7 @@ class DependencyManager(BaseManager):
         """
         # First, check specified. Note: installs if needed.
         versions_yielded = set()
-        for dependency in self._get_specified(name=name):
+        for dependency in self.get_project_dependencies(name=name):
             if dependency.version in versions_yielded:
                 continue
 
@@ -1394,7 +1447,7 @@ class DependencyManager(BaseManager):
             if key in item:
                 return cls.model_validate(item)
 
-        name = item.get("name") or json.dumps(item)  # NOTE: Using 'or' for short-circuit eval
+        name = item.get("name") or f"{item}"  # NOTE: Using 'or' for short-circuit eval
         raise ProjectError(
             f"No installed dependency API that supports '{name}'. "
             f"Keys={', '.join([x for x in item.keys()])}"
@@ -1454,7 +1507,7 @@ class DependencyManager(BaseManager):
         result: list[Dependency] = []
 
         # Log the errors as they happen but don't crash the full install.
-        for dep in self._get_specified(use_cache=use_cache):
+        for dep in self.get_project_dependencies(use_cache=use_cache):
             result.append(dep)
 
         return result
@@ -2065,15 +2118,19 @@ class LocalProject(Project):
         config_override: Optional[dict] = None,
     ) -> None:
         self._session_source_change_check: set[str] = set()
-        self.path = Path(path).resolve()
-        # A local project uses a special manifest.
-        self.manifest_path = manifest_path or self.path / ".build" / "__local__.json"
-        manifest = self.load_manifest()
 
         # NOTE: Set this before super() because needed for self.config read.
         self._config_override = config_override or {}
 
+        self._base_path = Path(path).resolve()
+
+        # A local project uses a special manifest.
+        self.manifest_path = manifest_path or self._base_path / ".build" / "__local__.json"
+        manifest = self.load_manifest()
+
         super().__init__(manifest, config_override=self._config_override)
+
+        self.path = self._base_path / (self.config.base_path or "")
 
         # NOTE: Avoid pointlessly adding info to the __local__ manifest.
         # This is mainly for dependencies.
@@ -2110,7 +2167,7 @@ class LocalProject(Project):
 
     @log_instead_of_fail(default="<ProjectManager>")
     def __repr__(self):
-        path = f" {clean_path(self.path)}"
+        path = f" {clean_path(self._base_path)}"
         # NOTE: 'Project' is meta for 'ProjectManager' (mixin magic).
         return f"<ProjectManager{path}>"
 
@@ -2125,34 +2182,37 @@ class LocalProject(Project):
             message = getattr(err, "message", str(err))
             did_append = False
 
-            all_files = get_all_files_in_directory(self.contracts_folder)
-            for path in all_files:
-                # Possibly, the user was trying to use a file name instead.
-                if path.stem != item:
-                    continue
+            if item not in (self.manifest.contract_types or {}):
+                all_files = get_all_files_in_directory(self.contracts_folder)
+                for path in all_files:
+                    # Possibly, the user was trying to use a file name instead.
+                    if path.stem != item:
+                        continue
 
-                if message and message[-1] not in (".", "?", "!"):
-                    message = f"{message}."
-                message = (
-                    f"{message} However, there is a source file named '{path.name}', "
-                    "did you mean to reference a contract name from this source file?"
-                )
-                did_append = True
-                break
+                    if message and message[-1] not in (".", "?", "!"):
+                        message = f"{message}."
 
-            # Possibly, the user does not have compiler plugins installed or working.
-            missing_exts = set()
-            for path in all_files:
-                if ext := get_full_extension(path):
-                    if ext not in self.compiler_manager.registered_compilers:
-                        missing_exts.add(ext)
+                    message = (
+                        f"{message} However, there is a source file named '{path.name}'. "
+                        "This file may not be compiling (see error above), or maybe you meant "
+                        "to reference a contract name from this source file?"
+                    )
+                    did_append = True
+                    break
 
-            if missing_exts:
-                start = "Else, could" if did_append else "Could"
-                message = (
-                    f"{message} {start} it be from one of the "
-                    "missing compilers for extensions: " + f'{", ".join(sorted(missing_exts))}?'
-                )
+                # Possibly, the user does not have compiler plugins installed or working.
+                missing_exts = set()
+                for path in all_files:
+                    if ext := get_full_extension(path):
+                        if ext not in self.compiler_manager.registered_compilers:
+                            missing_exts.add(ext)
+
+                if missing_exts:
+                    start = "Else, could" if did_append else "Could"
+                    message = (
+                        f"{message} {start} it be from one of the "
+                        "missing compilers for extensions: " + f'{", ".join(sorted(missing_exts))}?'
+                    )
 
             err.args = (message,)
             raise  # The same exception (keep the stack the same height).
@@ -2220,7 +2280,7 @@ class LocalProject(Project):
         ]
         plugins = [t for t in project_classes if not issubclass(t, ApeProject)]
         for api in plugins:
-            if instance := api.attempt_validate(path=self.path):
+            if instance := api.attempt_validate(path=self._base_path):
                 return instance
 
         # If no other APIs worked but we have a default Ape project, use that!
@@ -2230,10 +2290,10 @@ class LocalProject(Project):
 
         # For some reason we were just not able to create a project here.
         # I am not sure this is even possible.
-        raise ProjectError(f"'{self.path.name}' is not recognized as a project.")
+        raise ProjectError(f"'{self._base_path.name}' is not recognized as a project.")
 
     def _get_ape_project_api(self) -> Optional[ApeProject]:
-        if instance := ApeProject.attempt_validate(path=self.path):
+        if instance := ApeProject.attempt_validate(path=self._base_path):
             return cast(ApeProject, instance)
 
         return None
@@ -2245,7 +2305,7 @@ class LocalProject(Project):
         elif name := self.manifest.name:
             return name
 
-        return self.path.name.replace("_", "-").lower()
+        return self._base_path.name.replace("_", "-").lower()
 
     @cached_property
     def config(self) -> ApeConfig:
@@ -2356,9 +2416,10 @@ class LocalProject(Project):
             yield self
 
         else:
-            # Add sources to manifest memory, in case they are missing.
-            self._manifest.sources = dict(self.sources.items())
+            sources = dict(self.sources.items())
             with super().isolate_in_tempdir(**config_override) as project:
+                # Add sources to manifest memory, in case they are missing.
+                project.manifest.sources = sources
                 yield project
 
     def unpack(self, destination: Path, config_override: Optional[dict] = None) -> "LocalProject":
