@@ -124,7 +124,8 @@ def test_compile_when_sources_change(ape_cli, runner, integ_project, clean_cache
     )
     assert result.exit_code == 0, result.output
     assert "contracts/Interface.json" in result.output
-    assert "SUCCESS: 'local project' compiled." in result.output
+    assert "SUCCESS" in result.output
+    assert "'local project' compiled." in result.output
 
     # Change the contents of a file.
     source_path = integ_project.contracts_folder / "Interface.json"
@@ -137,7 +138,8 @@ def test_compile_when_sources_change(ape_cli, runner, integ_project, clean_cache
     )
     assert result.exit_code == 0, result.output
     assert "contracts/Interface.json" in result.output
-    assert "SUCCESS: 'local project' compiled." in result.output
+    assert "SUCCESS" in result.output
+    assert "'local project' compiled." in result.output
 
     # Verify that the next time, it does not need to recompile (no changes)
     result = runner.invoke(
@@ -145,6 +147,33 @@ def test_compile_when_sources_change(ape_cli, runner, integ_project, clean_cache
     )
     assert result.exit_code == 0, result.output
     assert "contracts/Interface.json" not in result.output
+
+
+@skip_projects_except("multiple-interfaces")
+def test_compile_when_sources_change_problematically(ape_cli, runner, integ_project, clean_cache):
+    """
+    There was a bug when sources changes but had errors, that the old sources continued
+    to be used and the errors were swallowed.
+    """
+    source_path = integ_project.contracts_folder / "Interface.json"
+    content = source_path.read_text()
+    assert "bar" in content, "Test setup failed - unexpected content"
+
+    result = runner.invoke(
+        ape_cli, ("compile", "--project", f"{integ_project.path}"), catch_exceptions=False
+    )
+    assert result.exit_code == 0, result.output
+
+    # Change the contents of a file in a problematic way.
+    source_path = integ_project.contracts_folder / "Interface.json"
+    modified_source_text = source_path.read_text().replace("{", "BRACKET")
+    source_path.unlink()
+    source_path.touch()
+    source_path.write_text(modified_source_text, encoding="utf8")
+    result = runner.invoke(
+        ape_cli, ("compile", "--project", f"{integ_project.path}"), catch_exceptions=False
+    )
+    assert result.exit_code != 0, result.output
 
 
 @skip_projects_except("multiple-interfaces")
@@ -159,7 +188,7 @@ def test_compile_when_contract_type_collision(ape_cli, runner, integ_project, cl
     clean()
     source_copy = temp_dir / "Interface.json"
     expected = (
-        r"ERROR: \(CompilerError\) ContractType collision\. "
+        r"ERROR: *\(CompilerError\) ContractType collision\. "
         r"Contracts '(.*\.json)' and '(.*\.json)' share the name 'Interface'\."
     )
     temp_dir.mkdir()
@@ -243,7 +272,8 @@ def test_compile_unknown_extension_does_not_compile(ape_cli, runner, integ_proje
     arguments = ("compile", "Interface.js", "--project", f"{integ_project.path}")
     result = runner.invoke(ape_cli, arguments, catch_exceptions=False)
     assert result.exit_code == 2, result.output
-    assert "Error: Source file 'Interface.js' not found." in result.output
+    assert "Error" in result.output
+    assert "Source file 'Interface.js' not found." in result.output
 
 
 @skip_projects_except("with-dependencies")

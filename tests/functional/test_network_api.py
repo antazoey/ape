@@ -6,7 +6,8 @@ import pytest
 from ape.api.networks import ForkedNetworkAPI, NetworkAPI, create_network_type
 from ape.api.providers import ProviderAPI
 from ape.exceptions import NetworkError, ProviderNotFoundError
-from ape_ethereum import EthereumConfig
+from ape_ethereum import Ethereum, EthereumConfig
+from ape_ethereum.ecosystem import BaseEthereumConfig, NetworkConfig, create_network_config
 from ape_ethereum.transactions import TransactionType
 
 
@@ -236,3 +237,52 @@ def test_providers_custom_non_fork_network_does_not_use_fork_provider(
         finally:
             network._get_plugin_providers = orig
             network.__dict__.pop("providers", None)  # de-cache
+
+
+def test_is_local(ethereum):
+    assert ethereum.local.is_local
+    assert not ethereum.mainnet.is_local
+    assert not ethereum.mainnet_fork.is_local
+
+
+def test_is_fork(ethereum):
+    assert not ethereum.local.is_fork
+    assert not ethereum.mainnet.is_fork
+    assert ethereum.mainnet_fork.is_fork
+
+
+def test_is_dev(ethereum):
+    assert ethereum.local.is_dev
+    assert not ethereum.mainnet.is_dev
+    assert ethereum.mainnet_fork.is_dev
+
+
+def test_is_mainnet(ethereum):
+    assert not ethereum.local.is_mainnet
+    assert ethereum.mainnet.is_mainnet
+    assert not ethereum.mainnet_fork.is_mainnet
+
+
+def test_is_mainnet_from_config(project):
+    """
+    Simulate an EVM plugin with a weird named mainnet that properly
+    configured it.
+    """
+    chain_id = 9191919191919919121177171
+    ecosystem_name = "ismainnettest"
+    network_name = "primarynetwork"
+    network_type = create_network_type(chain_id, chain_id)
+
+    class MyConfig(BaseEthereumConfig):
+        primarynetwork: NetworkConfig = create_network_config(is_mainnet=True)
+
+    class MyEcosystem(Ethereum):
+        name: str = ecosystem_name
+
+        @property
+        def config(self):
+            return MyConfig()
+
+    ecosystem = MyEcosystem()
+    network = network_type(name=network_name, ecosystem=ecosystem)
+    assert network.is_mainnet

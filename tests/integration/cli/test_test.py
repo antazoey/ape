@@ -220,6 +220,57 @@ def test_test_isolation_disabled(setup_pytester, integ_project, pytester, eth_te
     assert "F _function_isolation" not in "\n".join(result.outlines)
 
 
+@skip_projects_except("test")
+def test_verbosity(runner, ape_cli):
+    """
+    Tests again an issue where `ape test -v debug` would fail because of
+    an invalid type check from click; only appeared in `ape test` command
+    for some reason.
+    """
+    # NOTE: Only using `--fixtures` flag to avoid running tests (just prints fixtures).
+    cmd = ("test", "--verbosity", "DEBUG", "--fixtures")
+    result = runner.invoke(ape_cli, cmd, catch_exceptions=False)
+    assert result.exit_code == 0, result.output
+
+
+@skip_projects_except("test")
+@pytest.mark.parametrize("v_arg", ("-v", "-vv", "-vvv"))
+def test_vvv(runner, ape_cli, integ_project, v_arg):
+    """
+    Showing you can somehow use pytest's -v flag without
+    messing up Ape.
+    """
+    here = integ_project.path
+    os.chdir(integ_project.path)
+    name = f"test_{v_arg.replace('-', '_')}"
+
+    TEST = f"""
+    def {name}():
+        assert True
+    """.lstrip()
+
+    # Have to create a new test each time to avoid .pycs issues
+    new_test_file = integ_project.tests_folder / f"{name}.py"
+    new_test_file.write_text(TEST)
+
+    try:
+        # NOTE: v_arg purposely at the end because testing doesn't interfere
+        #   with click's option parsing "requires value" error.
+        result = runner.invoke(
+            ape_cli,
+            ("test", f"tests/{new_test_file.name}::{name}", v_arg),
+            catch_exceptions=False,
+        )
+    finally:
+        new_test_file.unlink(missing_ok=True)
+        os.chdir(here)
+
+    assert result.exit_code == 0, result.output
+    # Prove `-vvv` worked via the output.
+    # It shows PASSED instead of the little green dot.
+    assert "PASSED" in result.output
+
+
 @skip_projects_except("test", "with-contracts")
 def test_fixture_docs(setup_pytester, integ_project, pytester, eth_tester_provider):
     _ = eth_tester_provider  # Ensure using EthTester for this test.
@@ -380,3 +431,31 @@ def test_fails():
     actual = str(result.stdout)
     assert secret in actual
     assert "__FAIL__" in actual
+
+
+@skip_projects_except("with-contracts")
+def test_watch(mocker, integ_project, runner, ape_cli):
+    mock_event_handler = mocker.MagicMock()
+    event_handler_patch = mocker.patch("ape_test._cli._create_event_handler")
+    event_handler_patch.return_value = mock_event_handler
+
+    mock_observer = mocker.MagicMock()
+    observer_patch = mocker.patch("ape_test._cli._create_observer")
+    observer_patch.return_value = mock_observer
+
+    run_subprocess_patch = mocker.patch("ape_test._cli.run_subprocess")
+    run_main_loop_patch = mocker.patch("ape_test._cli._run_main_loop")
+    run_main_loop_patch.side_effect = SystemExit  # Avoid infinite loop.
+
+    # Only passing `-s` so we have an extra arg to test.
+    result = runner.invoke(ape_cli, ("test", "--watch", "-s"))
+    assert result.exit_code == 0
+
+    # The observer started, then the main runner exits, and the observer stops + joins.
+    assert mock_observer.start.call_count == 1
+    assert mock_observer.stop.call_count == 1
+    assert mock_observer.join.call_count == 1
+
+    # NOTE: We had a bug once where the args it received were not strings.
+    #   (wasn't deconstructing), so this check is important.
+    run_subprocess_patch.assert_called_once_with(["ape", "test", "-s"])
