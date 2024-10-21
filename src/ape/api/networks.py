@@ -875,7 +875,7 @@ class NetworkAPI(BaseInterfaceModel):
         The configuration of the network. See :class:`~ape.managers.config.ConfigManager`
         for more information on plugin configurations.
         """
-        return self.config_manager.get_config(self.ecosystem.name)
+        return self.ecosystem.config
 
     @property
     def config(self) -> PluginConfig:
@@ -975,8 +975,8 @@ class NetworkAPI(BaseInterfaceModel):
         Returns:
             :class:`ape.api.explorers.ExplorerAPI`, optional
         """
-
-        for plugin_name, plugin_tuple in self.plugin_manager.explorers:
+        chain_id = None if self.network_manager.active_provider is None else self.provider.chain_id
+        for plugin_name, plugin_tuple in self._plugin_explorers:
             ecosystem_name, network_name, explorer_class = plugin_tuple
 
             # Check for explicitly configured custom networks
@@ -987,16 +987,33 @@ class NetworkAPI(BaseInterfaceModel):
                 and self.name in plugin_config[self.ecosystem.name]
             )
 
+            # Return the first registered explorer (skipping any others)
             if self.ecosystem.name == ecosystem_name and (
                 self.name == network_name or has_explorer_config
             ):
-                # Return the first registered explorer (skipping any others)
-                return explorer_class(
-                    name=plugin_name,
-                    network=self,
-                )
+                return explorer_class(name=plugin_name, network=self)
+
+            elif chain_id is not None and explorer_class.supports_chain(chain_id):
+                # NOTE: Adhoc networks will likely reach here.
+                return explorer_class(name=plugin_name, network=self)
 
         return None  # May not have an block explorer
+
+    @property
+    def _plugin_explorers(self) -> list[tuple]:
+        # Abstracted for testing purposes.
+        return self.plugin_manager.explorers
+
+    @property
+    def is_mainnet(self) -> bool:
+        """
+        True when the network is the mainnet network for the ecosystem.
+        """
+        cfg_is_mainnet: Optional[bool] = self.config.get("is_mainnet")
+        if cfg_is_mainnet is not None:
+            return cfg_is_mainnet
+
+        return self.name == "mainnet"
 
     @property
     def is_fork(self) -> bool:
