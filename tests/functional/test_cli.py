@@ -428,14 +428,17 @@ def test_prompt_choice(runner, opt):
     assert "__expected_foo" in result.output
 
 
-def test_verbosity_option(runner):
+@pytest.mark.parametrize("name", ("-v", "--verbosity"))
+def test_verbosity_option(runner, name):
+    logger._did_parse_sys_argv = False  # Force re-parse
+
     @click.command()
     @verbosity_option()
     def cmd():
         click.echo(f"__expected_{logger.level}")
 
-    result = runner.invoke(cmd, ("--verbosity", logger.level))
-    assert f"__expected_{logger.level}" in result.output
+    result = runner.invoke(cmd, (name, "debug"))
+    assert "__expected_10" in result.output
 
 
 @pytest.mark.parametrize(
@@ -449,6 +452,18 @@ def test_verbosity_option_change_default(runner, level):
 
     verbosity_parameter = cmd.params[0]
     assert verbosity_parameter.default == level
+
+
+def test_verbosity_option_uses_logger_level_as_default(runner):
+    @click.command()
+    @verbosity_option(default=None)
+    def cmd():
+        click.echo(f"LogLevel={logger.level}")
+        pass
+
+    with logger.at_level(LogLevel.DEBUG):
+        result = runner.invoke(cmd)
+        assert "LogLevel=10" in result.output
 
 
 def test_account_prompt_name():

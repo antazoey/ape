@@ -1,6 +1,8 @@
 import sys
 from pathlib import Path
+from typing import Optional
 
+from ape.api import EcosystemAPI
 from ape.exceptions import ConfigError
 from ape.pytest.config import ConfigWrapper
 from ape.pytest.coverage import CoverageTracker
@@ -8,6 +10,22 @@ from ape.pytest.fixtures import PytestApeFixtures, ReceiptCapture
 from ape.pytest.gas import GasTracker
 from ape.pytest.runners import PytestApeRunner
 from ape.utils.basemodel import ManagerAccessMixin
+
+
+def _get_default_network(ecosystem: Optional[EcosystemAPI] = None) -> str:
+    if ecosystem is None:
+        ecosystem = ManagerAccessMixin.network_manager.default_ecosystem
+
+    if ecosystem.default_network.is_mainnet:
+        # Don't use mainnet for tests, even if it configured as
+        # the default.
+        raise ConfigError(
+            "Default network is mainnet; unable to run tests on mainnet. "
+            "Please specify the network using the `--network` flag or "
+            "configure a different default network."
+        )
+
+    return ecosystem.name
 
 
 def pytest_addoption(parser):
@@ -29,7 +47,7 @@ def pytest_addoption(parser):
     add_option(
         "--network",
         action="store",
-        default=ManagerAccessMixin.network_manager.default_ecosystem.name,
+        default=_get_default_network(),
         help="Override the default network and provider (see ``ape networks list`` for options).",
     )
     add_option(
@@ -80,8 +98,10 @@ def pytest_configure(config):
     gas_tracker = GasTracker(config_wrapper)
     coverage_tracker = CoverageTracker(config_wrapper)
 
-    # Enable verbose output if stdout capture is disabled
-    config.option.verbose = config.getoption("capture") == "no"
+    if not config.option.verbose:
+        # Enable verbose output if stdout capture is disabled
+        config.option.verbose = config.getoption("capture") == "no"
+    # else: user has already changes verbosity to an equal or higher level; avoid downgrading.
 
     # Register the custom Ape test runner
     runner = PytestApeRunner(config_wrapper, receipt_capture, gas_tracker, coverage_tracker)

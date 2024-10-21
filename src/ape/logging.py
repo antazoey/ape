@@ -2,7 +2,8 @@
 import logging
 import sys
 import traceback
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from enum import IntEnum
 from pathlib import Path
 from typing import IO, Any, Optional, Union
@@ -23,7 +24,7 @@ class LogLevel(IntEnum):
 logging.addLevelName(LogLevel.SUCCESS.value, LogLevel.SUCCESS.name)
 logging.SUCCESS = LogLevel.SUCCESS.value  # type: ignore
 DEFAULT_LOG_LEVEL = LogLevel.INFO.name
-DEFAULT_LOG_FORMAT = "%(levelname)s%(plugin)s: %(message)s"
+DEFAULT_LOG_FORMAT = "%(levelname_semicolon_padded)s %(plugin)s %(message)s"
 HIDDEN_MESSAGE = "[hidden]"
 
 
@@ -72,12 +73,16 @@ class ApeColorFormatter(logging.Formatter):
         super().__init__(fmt=fmt)
 
     def format(self, record):
+        record.levelname_semicolon_padded = f"{record.levelname}:".ljust(8)
         if _isatty(sys.stdout) and _isatty(sys.stderr):
             # Only color log messages when sys.stdout and sys.stderr are sent to the terminal.
             level = LogLevel(record.levelno)
             default_dict: dict[str, Any] = {}
             styles: dict[str, Any] = CLICK_STYLE_KWARGS.get(level, default_dict)
             record.levelname = click.style(record.levelname, **styles)
+            record.levelname_semicolon_padded = click.style(
+                record.levelname_semicolon_padded, **styles
+            )
 
         path = Path(record.pathname)
         record.plugin = ""
@@ -127,6 +132,7 @@ class ApeLogger:
         self.info = _logger.info
         self.debug = _logger.debug
         self._logger = _logger
+        self._did_parse_sys_argv = False
         self._load_from_sys_argv()
         self.fmt = fmt
 
@@ -145,22 +151,34 @@ class ApeLogger:
         """
         Load from sys.argv to beat race condition with `click`.
         """
+        if self._did_parse_sys_argv:
+            # Already parsed.
+            return
 
         log_level = _get_level(level=default)
         level_names = [lvl.name for lvl in LogLevel]
-        for arg_i in range(len(sys.argv) - 1):
+
+        #  Minus 2 because if `-v` is the last arg, it is not our verbosity `-v`.
+        num_args = len(sys.argv) - 2
+
+        for arg_i in range(1, 1 + num_args):
             if sys.argv[arg_i] == "-v" or sys.argv[arg_i] == "--verbosity":
-                level = _get_level(sys.argv[arg_i + 1].upper())
+                try:
+                    level = _get_level(sys.argv[arg_i + 1].upper())
+                except Exception:
+                    # Let it fail in a better spot, or is not our level.
+                    continue
 
                 if level in level_names:
+                    self._sys_argv = level
                     log_level = level
                     break
                 else:
-                    names_str = f"{', '.join(level_names[:-1])}, or {level_names[-1]}"
-                    self._logger.error(f"Must be one of '{names_str}', not '{level}'.")
-                    sys.exit(2)
+                    # Not our level.
+                    continue
 
         self.set_level(log_level)
+        self._did_parse_sys_argv = True
 
     @property
     def level(self) -> int:
@@ -184,6 +202,23 @@ class ApeLogger:
         self._logger.setLevel(level)
         for _logger in self._extra_loggers.values():
             _logger.setLevel(level)
+
+    @contextmanager
+    def at_level(self, level: Union[str, int, LogLevel]) -> Iterator:
+        """
+        Change the log-level in a context.
+
+        Args:
+            level (Union[str, int, LogLevel]): The level to use.
+
+        Returns:
+            Iterator
+        """
+
+        initial_level = self.level
+        self.set_level(level)
+        yield
+        self.set_level(initial_level)
 
     def log_error(self, err: Exception):
         """

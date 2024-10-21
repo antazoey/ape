@@ -1,12 +1,14 @@
 import copy
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
 from ape.api.networks import ForkedNetworkAPI, NetworkAPI, create_network_type
 from ape.api.providers import ProviderAPI
 from ape.exceptions import NetworkError, ProviderNotFoundError
-from ape_ethereum import EthereumConfig
+from ape_ethereum import Ethereum, EthereumConfig
+from ape_ethereum.ecosystem import BaseEthereumConfig, NetworkConfig, create_network_config
 from ape_ethereum.transactions import TransactionType
 
 
@@ -236,3 +238,114 @@ def test_providers_custom_non_fork_network_does_not_use_fork_provider(
         finally:
             network._get_plugin_providers = orig
             network.__dict__.pop("providers", None)  # de-cache
+
+
+def test_is_local(ethereum):
+    assert ethereum.local.is_local
+    assert not ethereum.mainnet.is_local
+    assert not ethereum.mainnet_fork.is_local
+
+
+def test_is_fork(ethereum):
+    assert not ethereum.local.is_fork
+    assert not ethereum.mainnet.is_fork
+    assert ethereum.mainnet_fork.is_fork
+
+
+def test_is_dev(ethereum):
+    assert ethereum.local.is_dev
+    assert not ethereum.mainnet.is_dev
+    assert ethereum.mainnet_fork.is_dev
+
+
+def test_is_mainnet(ethereum):
+    assert not ethereum.local.is_mainnet
+    assert ethereum.mainnet.is_mainnet
+    assert not ethereum.mainnet_fork.is_mainnet
+
+
+def test_is_mainnet_from_config(project):
+    """
+    Simulate an EVM plugin with a weird named mainnet that properly
+    configured it.
+    """
+    chain_id = 9191919191919919121177171
+    ecosystem_name = "ismainnettest"
+    network_name = "primarynetwork"
+    network_type = create_network_type(chain_id, chain_id)
+
+    class MyConfig(BaseEthereumConfig):
+        primarynetwork: NetworkConfig = create_network_config(is_mainnet=True)
+
+    class MyEcosystem(Ethereum):
+        name: str = ecosystem_name
+
+        @property
+        def config(self):
+            return MyConfig()
+
+    ecosystem = MyEcosystem()
+    network = network_type(name=network_name, ecosystem=ecosystem)
+    assert network.is_mainnet
+
+
+def test_explorer(networks):
+    """
+    Local network does not have an explorer, by default.
+    """
+    network = networks.ethereum.local
+    network.__dict__.pop("explorer", None)  # Ensure not cached yet.
+    assert network.explorer is None
+
+
+def test_explorer_when_network_registered(networks, mocker):
+    """
+    Tests the simple flow of having the Explorer plugin register
+    the networks it supports.
+    """
+    network = networks.ethereum.local
+    network.__dict__.pop("explorer", None)  # Ensure not cached yet.
+    name = "my-explorer"
+
+    def explorer_cls(*args, **kwargs):
+        res = mocker.MagicMock()
+        res.name = name
+        return res
+
+    mock_plugin_explorers = mocker.patch(
+        "ape.api.networks.NetworkAPI._plugin_explorers", new_callable=mock.PropertyMock
+    )
+    mock_plugin_explorers.return_value = [("my-example", ("ethereum", "local", explorer_cls))]
+    assert network.explorer is not None
+    assert network.explorer.name == name
+
+
+def test_explorer_when_adhoc_network_supported(networks, mocker):
+    """
+    Tests the flow of when a chain is supported by an explorer
+    but not registered in the plugin (API-flow).
+    """
+    network = networks.ethereum.local
+    network.__dict__.pop("explorer", None)  # Ensure not cached yet.
+    NAME = "my-explorer"
+
+    class MyExplorer:
+        name: str = NAME
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        @classmethod
+        def supports_chain(cls, chain_id):
+            return True
+
+    mock_plugin_explorers = mocker.patch(
+        "ape.api.networks.NetworkAPI._plugin_explorers", new_callable=mock.PropertyMock
+    )
+
+    # NOTE: Ethereum is not registered at the plugin level, but is at the API level.
+    mock_plugin_explorers.return_value = [
+        ("my-example", ("some-other-ecosystem", "local", MyExplorer))
+    ]
+    assert network.explorer is not None
+    assert network.explorer.name == NAME

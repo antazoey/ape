@@ -21,8 +21,8 @@ extras_require = {
         "hypothesis-jsonschema==0.19.0",  # JSON Schema fuzzer extension
     ],
     "lint": [
-        "black>=24.8.0,<25",  # Auto-formatter and linter
-        "mypy>=1.11.1,<2",  # Static type analyzer
+        "black>=24.10.0,<25",  # Auto-formatter and linter
+        "mypy>=1.11.2,<2",  # Static type analyzer
         "types-PyYAML",  # Needed due to mypy typeshed
         "types-requests",  # Needed due to mypy typeshed
         "types-setuptools",  # Needed due to mypy typeshed
@@ -35,20 +35,12 @@ extras_require = {
         "flake8-print>=4.0.1,<5",  # Detect print statements left in code
         "flake8-pydantic",  # For detecting issues with Pydantic models
         "isort>=5.13.2,<6",  # Import sorting linter
-        "mdformat>=0.7.17",  # Auto-formatter for markdown
+        "mdformat>=0.7.18",  # Auto-formatter for markdown
         "mdformat-gfm>=0.3.5",  # Needed for formatting GitHub-flavored markdown
         "mdformat-frontmatter>=0.4.1",  # Needed for frontmatters-style headers in issue templates
         "mdformat-pyproject>=0.0.1",  # Allows configuring in pyproject.toml
     ],
-    "doc": [
-        "pygments>=2.17.0,<3",  # Needed for the Vyper lexer
-        "myst-parser>=1.0.0,<2",  # Parse markdown docs
-        "sphinx-click>=4.4.0,<5",  # For documenting CLI
-        "Sphinx>=6.1.3,<7",  # Documentation generator
-        "sphinx_rtd_theme>=1.2.0,<2",  # Readthedocs.org theme
-        "sphinxcontrib-napoleon>=0.7",  # Allow Google-style documentation
-        "sphinx-plausible>=0.1.2,<0.2",
-    ],
+    "doc": ["sphinx-ape"],
     "release": [  # `release` GitHub Action job uses this
         "setuptools",  # Installation tool
         "wheel",  # Packaging tool
@@ -110,7 +102,7 @@ setup(
         "pandas>=2.2.2,<3",
         "pluggy>=1.3,<2",
         "pydantic>=2.6.4,<3",
-        "pydantic-settings>=2.0.3,<3",
+        "pydantic-settings>=2.5.2,<3",
         "pytest>=8.0,<9.0",
         "python-dateutil>=2.8.2,<3",
         "PyYAML>=5.0,<7",
@@ -136,7 +128,7 @@ setup(
         "eip712>=0.2.10,<0.3",
         "ethpm-types>=0.6.17,<0.7",
         "eth_pydantic_types>=0.1.3,<0.2",
-        "evmchains>=0.0.10,<0.1",
+        "evmchains>=0.1.0,<0.2",
         "evm-trace>=0.2.3,<0.3",
     ],
     entry_points={

@@ -1,4 +1,6 @@
 import json
+import os
+import re
 import shutil
 from pathlib import Path
 
@@ -12,7 +14,7 @@ import ape
 from ape import Project
 from ape.api.projects import ApeProject
 from ape.contracts import ContractContainer
-from ape.exceptions import ProjectError
+from ape.exceptions import ConfigError, ProjectError
 from ape.logging import LogLevel
 from ape.utils import create_tempdir
 from ape_pm import BrownieProject, FoundryProject
@@ -93,6 +95,34 @@ def test_path(project):
     assert project.path is not None
 
 
+def test_path_configured(project):
+    """
+    Simulating package structures like snekmate.
+    """
+    madeup_name = "snakemate"
+    with create_tempdir(name=madeup_name) as temp_dir:
+        subdir = temp_dir / "src"
+        contracts_folder = subdir / madeup_name
+        contracts_folder.mkdir(parents=True)
+        contract = contracts_folder / "snake.json"
+        abi = [{"name": "foo", "type": "fallback", "stateMutability": "nonpayable"}]
+        contract.write_text(json.dumps(abi), encoding="utf8")
+
+        snakemate = Project(
+            temp_dir, config_override={"base_path": "src", "contracts_folder": madeup_name}
+        )
+        assert snakemate.name == madeup_name
+        assert snakemate.path == subdir
+        assert snakemate.contracts_folder == contracts_folder
+
+        # The repr should show `/snakemate` and not `/snakemate/src/`.
+        assert re.match(r"<ProjectManager [\w|/]*/snakemate>", repr(snakemate))
+
+        actual = snakemate.load_contracts()
+        assert "snake" in actual
+        assert actual["snake"].source_id == f"{madeup_name}/snake.json"
+
+
 def test_name(project):
     assert project.name == project.path.name
 
@@ -148,6 +178,26 @@ def test_isolate_in_tempdir(project):
         assert not tmp_project.manifest_path.is_file()
 
 
+def test_isolate_in_tempdir_does_not_alter_sources(project):
+    # First, create a bad source.
+    with project.temp_config(contracts_folder="tests"):
+        new_src = project.contracts_folder / "newsource.json"
+        new_src.write_text("this is not json, oops")
+        project.sources.refresh()  # Only need to be called when run with other tests.
+
+        try:
+            with project.isolate_in_tempdir() as tmp_project:
+                # The new (bad) source should be in the temp project.
+                actual = {**(tmp_project.manifest.sources or {})}
+        finally:
+            new_src.unlink()
+            project.sources.refresh()
+
+        # Ensure "newsource" did not persist in the in-memory manifest.
+        assert "tests/newsource.json" in actual, project.path
+        assert "tests/newsource.json" not in (project.manifest.sources or {})
+
+
 def test_in_tempdir(project, tmp_project):
     assert not project.in_tempdir
     assert tmp_project.in_tempdir
@@ -200,8 +250,9 @@ def test_getattr_same_name_as_source_file(project_with_source_files_contract):
     expected = (
         r"'LocalProject' object has no attribute 'ContractA'\. "
         r"Also checked extra\(s\) 'contracts'\. "
-        r"However, there is a source file named 'ContractA\.sol', "
-        r"did you mean to reference a contract name from this source file\? "
+        r"However, there is a source file named 'ContractA\.sol'\. "
+        r"This file may not be compiling \(see error above\), "
+        r"or maybe you meant to reference a contract name from this source file\? "
         r"Else, could it be from one of the missing compilers for extensions: .*"
     )
     with pytest.raises(AttributeError, match=expected):
@@ -587,7 +638,7 @@ def test_project_api_foundry_and_ape_config_found(foundry_toml):
 
 def test_get_contract(project_with_contracts):
     actual = project_with_contracts.get_contract("Other")
-    assert isinstance(actual, ContractContainer)
+    assert isinstance(actual, ContractContainer), f"{type(actual)}"
     assert actual.contract_type.name == "Other"
 
     # Ensure manifest is only loaded once by none-ing out the path.
@@ -619,6 +670,21 @@ class TestProject:
         assert project.path == with_dependencies_project_path
         # Manifest should have been created by default.
         assert not project.manifest_path.is_file()
+
+    def test_init_invalid_config(self):
+        here = os.curdir
+        with create_tempdir() as temp_dir:
+            cfgfile = temp_dir / "ape-config.yaml"
+            # Name is invalid!
+            cfgfile.write_text("name:\n  {asdf}")
+
+            os.chdir(temp_dir)
+            expected = r"[.\n]*Input should be a valid string\n-->1: name:\n   2:   {asdf}[.\n]*"
+            try:
+                with pytest.raises(ConfigError, match=expected):
+                    _ = Project(temp_dir)
+            finally:
+                os.chdir(here)
 
     def test_config_override(self, with_dependencies_project_path):
         contracts_folder = with_dependencies_project_path / "my_contracts"
@@ -739,11 +805,12 @@ class TestFoundryProject:
         )
 
     def test_extract_config(self, foundry_toml, gitmodules, mock_github):
-        with ape.Project.create_temporary_project() as temp_project:
-            cfg_file = temp_project.path / "foundry.toml"
+        with create_tempdir() as temp_dir:
+            cfg_file = temp_dir / "foundry.toml"
             cfg_file.write_text(foundry_toml, encoding="utf8")
-            gitmodules_file = temp_project.path / ".gitmodules"
+            gitmodules_file = temp_dir / ".gitmodules"
             gitmodules_file.write_text(gitmodules, encoding="utf8")
+            temp_project = Project(temp_dir)
 
             api = temp_project.project_api
             mock_github.get_repo.return_value = {"default_branch": "main"}
@@ -823,7 +890,9 @@ class TestSourceManager:
 
             # Top-level match.
             for base in (source_path, str(source_path), "Contract", "Contract.json"):
-                assert pm.sources.lookup(base) == source_path, f"Failed to lookup {base}"
+                # Using stem in case it returns `Contract.__mock__`, which is
+                # added / removed as part of other tests (running x-dist).
+                assert pm.sources.lookup(base).stem == source_path.stem, f"Failed to lookup {base}"
 
             # Nested: 1st level
             for closest in (
@@ -834,7 +903,9 @@ class TestSourceManager:
             ):
                 actual = pm.sources.lookup(closest)
                 expected = nested_source_a
-                assert actual == expected, f"Failed to lookup {closest}"
+                # Using stem in case it returns `Contract.__mock__`, which is
+                # added / removed as part of other tests (running x-dist).
+                assert actual.stem == expected.stem, f"Failed to lookup {closest}"
 
             # Nested: 2nd level
             for closest in (
