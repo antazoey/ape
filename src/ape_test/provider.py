@@ -17,7 +17,9 @@ from web3.exceptions import ContractLogicError as Web3ContractLogicError
 from web3.providers.eth_tester.defaults import API_ENDPOINTS, static_return
 from web3.types import TxParams
 
-from ape.api import BlockAPI, PluginConfig, ReceiptAPI, TestProviderAPI, TraceAPI, TransactionAPI
+from ape.api.providers import BlockAPI, TestProviderAPI
+from ape.api.trace import TraceAPI
+from ape.api.transactions import ReceiptAPI, TransactionAPI
 from ape.exceptions import (
     APINotImplementedError,
     ContractLogicError,
@@ -28,18 +30,17 @@ from ape.exceptions import (
     VirtualMachineError,
 )
 from ape.logging import logger
-from ape.types import AddressType, BlockID, ContractLog, LogFilter, SnapshotID
-from ape.utils import DEFAULT_TEST_CHAIN_ID, DEFAULT_TEST_HD_PATH, gas_estimation_error_message
+from ape.types.address import AddressType
+from ape.types.events import ContractLog, LogFilter
+from ape.types.vm import BlockID, SnapshotID
+from ape.utils.misc import gas_estimation_error_message
+from ape.utils.testing import DEFAULT_TEST_HD_PATH
 from ape_ethereum.provider import Web3Provider
 from ape_ethereum.trace import TraceApproach, TransactionTrace
+from ape_test.config import EthTesterProviderConfig
 
 if TYPE_CHECKING:
     from ape.api.accounts import TestAccountAPI
-
-
-class EthTesterProviderConfig(PluginConfig):
-    chain_id: int = DEFAULT_TEST_CHAIN_ID
-    auto_mine: bool = True
 
 
 class LocalProvider(TestProviderAPI, Web3Provider):
@@ -110,6 +111,9 @@ class LocalProvider(TestProviderAPI, Web3Provider):
         self._web3 = None
         self._evm_backend = None
         self.provider_settings = {}
+
+        # Invalidate snapshots.
+        self.chain_manager._snapshots[self.chain_id] = []
 
     def update_settings(self, new_settings: dict):
         self.provider_settings = {**self.provider_settings, **new_settings}

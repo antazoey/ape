@@ -12,8 +12,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from ape.exceptions import ConfigError
 from ape.logging import logger
-from ape.types import AddressType
-from ape.utils import clean_path
+from ape.types.address import AddressType
 from ape.utils.basemodel import (
     ExtraAttributesMixin,
     ExtraModelAttributes,
@@ -23,6 +22,7 @@ from ape.utils.basemodel import (
     only_raise_attribute_error,
 )
 from ape.utils.misc import load_config
+from ape.utils.os import clean_path
 
 ConfigItemType = TypeVar("ConfigItemType")
 
@@ -333,6 +333,12 @@ class ApeConfig(ExtraAttributesMixin, BaseSettings, ManagerAccessMixin):
     The name of the project.
     """
 
+    base_path: Optional[str] = None
+    """
+    Use this when the project's base-path is not the
+    root of the project.
+    """
+
     request_headers: dict = {}
     """
     Extra request headers for all HTTP requests.
@@ -418,6 +424,21 @@ class ApeConfig(ExtraAttributesMixin, BaseSettings, ManagerAccessMixin):
 
     @classmethod
     def validate_file(cls, path: Path, **overrides) -> "ApeConfig":
+        """
+        Create an ApeConfig class using the given path.
+        Supports both pyproject.toml and ape-config.[.yml|.yaml|.json] files.
+
+        Raises:
+            :class:`~ape.exceptions.ConfigError`: When given an unknown file type
+              or the data is invalid.
+
+        Args:
+            path (Path): The path to the file.
+            **overrides: Config overrides.
+
+        Returns:
+            :class:`~ape.api.config.ApeConfig`
+        """
         data = {**load_config(path), **overrides}
 
         # NOTE: We are including the project path here to assist

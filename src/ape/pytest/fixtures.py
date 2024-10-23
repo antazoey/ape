@@ -14,7 +14,7 @@ from ape.managers.chain import ChainManager
 from ape.managers.networks import NetworkManager
 from ape.managers.project import ProjectManager
 from ape.pytest.config import ConfigWrapper
-from ape.types import SnapshotID
+from ape.types.vm import SnapshotID
 from ape.utils.basemodel import ManagerAccessMixin
 from ape.utils.rpc import allow_disconnected
 
@@ -136,7 +136,7 @@ class PytestApeFixtures(ManagerAccessMixin):
 
     @allow_disconnected
     def _restore(self, snapshot_id: SnapshotID):
-        if snapshot_id not in self.chain_manager._snapshots:
+        if snapshot_id not in self.chain_manager._snapshots[self.provider.chain_id]:
             return
         try:
             self.chain_manager.restore(snapshot_id)

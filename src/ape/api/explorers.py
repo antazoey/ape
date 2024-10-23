@@ -1,10 +1,11 @@
+from abc import abstractmethod
 from typing import Optional
 
 from ethpm_types import ContractType
 
-from ape.api import networks
-from ape.types import AddressType
-from ape.utils import BaseInterfaceModel, abstractmethod
+from ape.api.networks import NetworkAPI
+from ape.types.address import AddressType
+from ape.utils.basemodel import BaseInterfaceModel
 
 
 class ExplorerAPI(BaseInterfaceModel):
@@ -14,7 +15,7 @@ class ExplorerAPI(BaseInterfaceModel):
     """
 
     name: str  # Plugin name
-    network: networks.NetworkAPI
+    network: NetworkAPI
 
     @abstractmethod
     def get_address_url(self, address: AddressType) -> str:
@@ -60,3 +61,19 @@ class ExplorerAPI(BaseInterfaceModel):
         Args:
             address (:class:`~ape.types.address.AddressType`): The address of the deployed contract.
         """
+
+    @classmethod
+    def supports_chain(cls, chain_id: int) -> bool:
+        """
+        Returns ``True`` when the given chain ID is claimed to be
+        supported by this explorer. Adhoc / custom networks rely on
+        this feature to have automatic-explorer support. Explorer
+        plugins should override this.
+
+        Args:
+            chain_id (int): The chain ID to check.
+
+        Returns:
+            bool
+        """
+        return False

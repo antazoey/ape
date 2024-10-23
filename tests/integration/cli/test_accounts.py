@@ -32,6 +32,7 @@ def extract_mnemonic(output: str) -> Optional[list[str]]:
 def temp_keyfile_path(config):
     # NOTE: Is a fresh account for each use.
     path = config.DATA_FOLDER / "accounts" / f"{ALIAS}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)  # create accounts subfolder
     path.unlink(missing_ok=True)
     return path
 
@@ -88,7 +89,8 @@ def test_import_alias_is_private_key(ape_cli, runner):
         input="\n".join([f"0x{PRIVATE_KEY}", PASSWORD, PASSWORD]),
     )
     assert result.exit_code != 0, result.output
-    expected = "ERROR: (AccountsError) Longer aliases cannot be hex strings.\n"
+    assert "ERROR" in result.output
+    expected = "(AccountsError) Longer aliases cannot be hex strings.\n"
     assert expected in result.output
 
 
@@ -182,7 +184,7 @@ def test_import_mnemonic_custom_hdpath(
 
 
 @run_once
-def test_export(ape_cli, runner, temp_keyfile, keyfile_account, test_accounts):
+def test_export(ape_cli, runner, temp_keyfile, keyfile_account, accounts):
     # export key
     result = runner.invoke(
         ape_cli,
@@ -194,7 +196,7 @@ def test_export(ape_cli, runner, temp_keyfile, keyfile_account, test_accounts):
     assert keyfile_account.address in result.output
     # NOTE: Both of these accounts are the same as the first
     #   test account.
-    assert test_accounts[0].private_key in result.output
+    assert accounts[0].private_key in result.output
 
 
 @run_once

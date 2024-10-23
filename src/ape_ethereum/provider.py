@@ -37,7 +37,10 @@ from web3.providers import AutoProvider
 from web3.providers.auto import load_provider_from_environment
 from web3.types import FeeHistory, RPCEndpoint, TxParams
 
-from ape.api import Address, BlockAPI, ProviderAPI, ReceiptAPI, TraceAPI, TransactionAPI
+from ape.api.address import Address
+from ape.api.providers import BlockAPI, ProviderAPI
+from ape.api.trace import TraceAPI
+from ape.api.transactions import ReceiptAPI, TransactionAPI
 from ape.exceptions import (
     ApeException,
     APINotImplementedError,
@@ -53,17 +56,13 @@ from ape.exceptions import (
     VirtualMachineError,
 )
 from ape.logging import logger, sanitize_url
-from ape.types import (
-    AddressType,
-    AutoGasLimit,
-    BlockID,
-    ContractCode,
-    ContractLog,
-    LogFilter,
-    SourceTraceback,
-)
-from ape.utils import ManagerAccessMixin, gas_estimation_error_message, to_int
-from ape.utils.misc import DEFAULT_MAX_RETRIES_TX
+from ape.types.address import AddressType
+from ape.types.events import ContractLog, LogFilter
+from ape.types.gas import AutoGasLimit
+from ape.types.trace import SourceTraceback
+from ape.types.vm import BlockID, ContractCode
+from ape.utils.basemodel import ManagerAccessMixin
+from ape.utils.misc import DEFAULT_MAX_RETRIES_TX, gas_estimation_error_message, to_int
 from ape_ethereum._print import CONSOLE_ADDRESS, console_contract
 from ape_ethereum.trace import CallTrace, TraceApproach, TransactionTrace
 from ape_ethereum.transactions import AccessList, AccessListTransaction, TransactionStatusEnum
@@ -624,11 +623,35 @@ class Web3Provider(ProviderAPI, ABC):
         )
         hex_hash = HexBytes(txn_hash)
 
+        txn: dict = {}
+        if transaction := kwargs.get("transaction"):
+            # perf: If called `send_transaction()`, we should already have the data!
+            txn = (
+                transaction
+                if isinstance(transaction, dict)
+                else transaction.model_dump(by_alias=True, mode="json")
+            )
+
+        private = kwargs.get("private")
+
         try:
             receipt_data = dict(
                 self.web3.eth.wait_for_transaction_receipt(hex_hash, timeout=timeout)
             )
         except TimeExhausted as err:
+            # Since private transactions can take longer,
+            #  return a partial receipt instead of throwing a TimeExhausted error.
+            if private:
+                # Return with a partial receipt
+                data = {
+                    "block_number": -1,
+                    "required_confirmations": required_confirmations,
+                    "txn_hash": txn_hash,
+                    "status": TransactionStatusEnum.NO_ERROR,
+                    **txn,
+                }
+                receipt = self._create_receipt(**data)
+                return receipt
             msg_str = str(err)
             if f"HexBytes('{txn_hash}')" in msg_str:
                 msg_str = msg_str.replace(f"HexBytes('{txn_hash}')", f"'{txn_hash}'")
@@ -641,18 +664,11 @@ class Web3Provider(ProviderAPI, ABC):
         network_config: dict = ecosystem_config.get(self.network.name, {})
         max_retries = network_config.get("max_get_transaction_retries", DEFAULT_MAX_RETRIES_TX)
 
-        if transaction := kwargs.get("transaction"):
-            # perf: If called `send_transaction()`, we should already have the data!
-            txn = (
-                transaction
-                if isinstance(transaction, dict)
-                else transaction.model_dump(by_alias=True, mode="json")
-            )
+        if transaction:
             if "effectiveGasPrice" in receipt_data:
                 receipt_data["gasPrice"] = receipt_data["effectiveGasPrice"]
 
         else:
-            txn = {}
             for attempt in range(max_retries):
                 try:
                     txn = dict(self.web3.eth.get_transaction(HexStr(txn_hash)))
@@ -1206,7 +1222,7 @@ class Web3Provider(ProviderAPI, ABC):
             # Maybe it is a JSON-str.
             # NOTE: For some reason, it comes back with single quotes though.
             try:
-                err_data = json.loads(err_data.replace("'", '"'))
+                err_data = json.loads(str(err_data or "").replace("'", '"'))
             except Exception:
                 return VirtualMachineError(base_err=exception, **kwargs)
 

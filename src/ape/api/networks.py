@@ -1,6 +1,7 @@
 import copy
+from abc import abstractmethod
 from collections.abc import Collection, Iterator, Sequence
-from functools import partial
+from functools import cached_property, partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
 
@@ -11,7 +12,7 @@ from eth_account._utils.signing import (
 )
 from eth_pydantic_types import HexBytes
 from eth_utils import keccak, to_int
-from ethpm_types import BaseModel, ContractType
+from ethpm_types import ContractType
 from ethpm_types.abi import ABIType, ConstructorABI, EventABI, MethodABI
 from pydantic import model_validator
 
@@ -25,19 +26,23 @@ from ape.exceptions import (
     SignatureError,
 )
 from ape.logging import logger
-from ape.types import AddressType, AutoGasLimit, ContractLog, GasLimit, RawAddress
-from ape.utils import (
-    DEFAULT_TRANSACTION_ACCEPTANCE_TIMEOUT,
+from ape.types.address import AddressType, RawAddress
+from ape.types.events import ContractLog
+from ape.types.gas import AutoGasLimit, GasLimit
+from ape.utils.basemodel import (
     BaseInterfaceModel,
+    BaseModel,
     ExtraAttributesMixin,
     ExtraModelAttributes,
     ManagerAccessMixin,
-    RPCHeaders,
-    abstractmethod,
-    cached_property,
+)
+from ape.utils.misc import (
+    DEFAULT_TRANSACTION_ACCEPTANCE_TIMEOUT,
+    LOCAL_NETWORK_NAME,
     log_instead_of_fail,
     raises_not_implemented,
 )
+from ape.utils.rpc import RPCHeaders
 
 from .config import PluginConfig
 
@@ -46,9 +51,6 @@ if TYPE_CHECKING:
     from .providers import BlockAPI, ProviderAPI, UpstreamProvider
     from .trace import TraceAPI
     from .transactions import ReceiptAPI, TransactionAPI
-
-
-LOCAL_NETWORK_NAME = "local"
 
 
 class ProxyInfoAPI(BaseModel):
@@ -419,7 +421,7 @@ class EcosystemAPI(ExtraAttributesMixin, BaseInterfaceModel):
         """
 
     @abstractmethod
-    def decode_logs(self, logs: Sequence[dict], *events: EventABI) -> Iterator["ContractLog"]:
+    def decode_logs(self, logs: Sequence[dict], *events: EventABI) -> Iterator[ContractLog]:
         """
         Decode any contract logs that match the given event ABI from the raw log data.
 
@@ -875,7 +877,7 @@ class NetworkAPI(BaseInterfaceModel):
         The configuration of the network. See :class:`~ape.managers.config.ConfigManager`
         for more information on plugin configurations.
         """
-        return self.config_manager.get_config(self.ecosystem.name)
+        return self.ecosystem.config
 
     @property
     def config(self) -> PluginConfig:
@@ -975,8 +977,8 @@ class NetworkAPI(BaseInterfaceModel):
         Returns:
             :class:`ape.api.explorers.ExplorerAPI`, optional
         """
-
-        for plugin_name, plugin_tuple in self.plugin_manager.explorers:
+        chain_id = None if self.network_manager.active_provider is None else self.provider.chain_id
+        for plugin_name, plugin_tuple in self._plugin_explorers:
             ecosystem_name, network_name, explorer_class = plugin_tuple
 
             # Check for explicitly configured custom networks
@@ -987,16 +989,33 @@ class NetworkAPI(BaseInterfaceModel):
                 and self.name in plugin_config[self.ecosystem.name]
             )
 
+            # Return the first registered explorer (skipping any others)
             if self.ecosystem.name == ecosystem_name and (
                 self.name == network_name or has_explorer_config
             ):
-                # Return the first registered explorer (skipping any others)
-                return explorer_class(
-                    name=plugin_name,
-                    network=self,
-                )
+                return explorer_class(name=plugin_name, network=self)
+
+            elif chain_id is not None and explorer_class.supports_chain(chain_id):
+                # NOTE: Adhoc networks will likely reach here.
+                return explorer_class(name=plugin_name, network=self)
 
         return None  # May not have an block explorer
+
+    @property
+    def _plugin_explorers(self) -> list[tuple]:
+        # Abstracted for testing purposes.
+        return self.plugin_manager.explorers
+
+    @property
+    def is_mainnet(self) -> bool:
+        """
+        True when the network is the mainnet network for the ecosystem.
+        """
+        cfg_is_mainnet: Optional[bool] = self.config.get("is_mainnet")
+        if cfg_is_mainnet is not None:
+            return cfg_is_mainnet
+
+        return self.name == "mainnet"
 
     @property
     def is_fork(self) -> bool:
@@ -1378,3 +1397,15 @@ def create_network_type(chain_id: int, network_id: int, is_fork: bool = False) -
             return network_id
 
     return network_def
+
+
+# TODO: Can remove in 0.9 since `LOCAL_NETWORK_NAME` doesn't need to be here.
+__all__ = [
+    "create_network_type",
+    "EcosystemAPI",
+    "LOCAL_NETWORK_NAME",  # Have to leave for backwards compat.
+    "ForkedNetworkAPI",
+    "NetworkAPI",
+    "ProviderContextManager",
+    "ProxyInfoAPI",
+]

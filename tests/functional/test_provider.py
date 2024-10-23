@@ -9,7 +9,7 @@ from eth_typing import HexStr
 from eth_utils import ValidationError, to_hex
 from hexbytes import HexBytes
 from requests import HTTPError
-from web3.exceptions import ContractPanicError
+from web3.exceptions import ContractPanicError, TimeExhausted
 
 from ape import convert
 from ape.exceptions import (
@@ -20,7 +20,7 @@ from ape.exceptions import (
     TransactionError,
     TransactionNotFoundError,
 )
-from ape.types import LogFilter
+from ape.types.events import LogFilter
 from ape.utils.testing import DEFAULT_TEST_ACCOUNT_BALANCE, DEFAULT_TEST_CHAIN_ID
 from ape_ethereum.provider import WEB3_PROVIDER_URI_ENV_VAR_NAME, Web3Provider, _sanitize_web3_url
 from ape_ethereum.transactions import TransactionStatusEnum, TransactionType
@@ -128,6 +128,52 @@ def test_get_receipt_exists_with_timeout(eth_tester_provider, vyper_contract_ins
     assert receipt_from_provider.receiver == vyper_contract_instance.address
 
 
+def test_get_receipt_ignores_timeout_when_private(
+    eth_tester_provider, mock_web3, vyper_contract_instance, owner
+):
+    receipt_from_invoke = vyper_contract_instance.setNumber(889, sender=owner)
+    real_web3 = eth_tester_provider._web3
+
+    mock_web3.eth.wait_for_transaction_receipt.side_effect = TimeExhausted
+    eth_tester_provider._web3 = mock_web3
+    try:
+        receipt_from_provider = eth_tester_provider.get_receipt(
+            receipt_from_invoke.txn_hash, timeout=5, private=True
+        )
+
+    finally:
+        eth_tester_provider._web3 = real_web3
+
+    assert receipt_from_provider.txn_hash == receipt_from_invoke.txn_hash
+    assert not receipt_from_provider.confirmed
+
+
+def test_get_receipt_passes_receipt_when_private(
+    eth_tester_provider, mock_web3, vyper_contract_instance, owner
+):
+    receipt_from_invoke = vyper_contract_instance.setNumber(890, sender=owner)
+    real_web3 = eth_tester_provider._web3
+
+    mock_web3.eth.wait_for_transaction_receipt.side_effect = TimeExhausted
+    eth_tester_provider._web3 = mock_web3
+    try:
+        receipt_from_provider = eth_tester_provider.get_receipt(
+            receipt_from_invoke.txn_hash,
+            timeout=5,
+            private=True,
+            transaction=receipt_from_invoke.transaction,
+        )
+
+    finally:
+        eth_tester_provider._web3 = real_web3
+
+    assert receipt_from_provider.txn_hash == receipt_from_invoke.txn_hash
+    assert not receipt_from_provider.confirmed
+
+    # Receiver comes from the transaction.
+    assert receipt_from_provider.receiver == vyper_contract_instance.address
+
+
 def test_get_contracts_logs_all_logs(chain, contract_instance, owner, eth_tester_provider):
     start_block = chain.blocks.height
     stop_block = start_block + 100
@@ -196,11 +242,11 @@ def test_supports_tracing(eth_tester_provider):
     assert not eth_tester_provider.supports_tracing
 
 
-def test_provider_get_balance(project, networks, accounts):
+def test_get_balance(networks, accounts):
     """
     Test that the address is an AddressType.
     """
-    balance = networks.provider.get_balance(accounts.test_accounts[0].address)
+    balance = networks.provider.get_balance(accounts[0].address)
 
     assert type(balance) is int
     assert balance == DEFAULT_TEST_ACCOUNT_BALANCE
@@ -543,3 +589,10 @@ def test_ipc_per_network(project, key):
         # TODO: 0.9 investigate not using random if ipc set.
 
         assert node.ipc_path == Path(ipc)
+
+
+def test_update_settings_invalidates_snapshots(eth_tester_provider, chain):
+    snapshot = chain.snapshot()
+    assert snapshot in chain._snapshots[eth_tester_provider.chain_id]
+    eth_tester_provider.update_settings({})
+    assert snapshot not in chain._snapshots[eth_tester_provider.chain_id]

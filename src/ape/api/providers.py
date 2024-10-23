@@ -7,7 +7,9 @@ import shutil
 import sys
 import time
 import warnings
+from abc import abstractmethod
 from collections.abc import Iterable, Iterator
+from functools import cached_property
 from logging import FileHandler, Formatter, Logger, getLogger
 from pathlib import Path
 from signal import SIGINT, SIGTERM, signal
@@ -16,7 +18,7 @@ from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 from eth_pydantic_types import HexBytes
 from ethpm_types.abi import EventABI
-from pydantic import Field, computed_field, model_validator
+from pydantic import Field, computed_field, field_serializer, model_validator
 
 from ape.api.config import PluginConfig
 from ape.api.networks import NetworkAPI
@@ -33,14 +35,19 @@ from ape.exceptions import (
     VirtualMachineError,
 )
 from ape.logging import LogLevel, logger
-from ape.types import AddressType, BlockID, ContractCode, ContractLog, HexInt, LogFilter, SnapshotID
-from ape.utils import BaseInterfaceModel, JoinableQueue, abstractmethod, cached_property, spawn
+from ape.types.address import AddressType
+from ape.types.basic import HexInt
+from ape.types.events import ContractLog, LogFilter
+from ape.types.vm import BlockID, ContractCode, SnapshotID
+from ape.utils.basemodel import BaseInterfaceModel
 from ape.utils.misc import (
     EMPTY_BYTES32,
     _create_raises_not_implemented_error,
     log_instead_of_fail,
     raises_not_implemented,
+    to_int,
 )
+from ape.utils.process import JoinableQueue, spawn
 from ape.utils.rpc import RPCHeaders
 
 if TYPE_CHECKING:
@@ -74,7 +81,7 @@ class BlockAPI(BaseInterfaceModel):
         default=EMPTY_BYTES32, alias="parentHash"
     )  # NOTE: genesis block has no parent hash
     """
-    The preceeding block's hash.
+    The preceding block's hash.
     """
 
     timestamp: HexInt
@@ -83,7 +90,7 @@ class BlockAPI(BaseInterfaceModel):
     NOTE: The pending block uses the current timestamp.
     """
 
-    _size: Optional[int] = None
+    _size: Optional[HexInt] = None
 
     @log_instead_of_fail(default="<BlockAPI>")
     def __repr__(self) -> str:
@@ -111,7 +118,6 @@ class BlockAPI(BaseInterfaceModel):
         Saves it to a private member on this class and
         gets returned in computed field "size".
         """
-
         if isinstance(values, BlockAPI):
             size = values.size
 
@@ -125,9 +131,13 @@ class BlockAPI(BaseInterfaceModel):
 
         model = handler(values)
         if size is not None:
-            model._size = size
+            model._size = to_int(size)
 
         return model
+
+    @field_serializer("size")
+    def serialize_size(self, value):
+        return to_int(value)
 
     @computed_field()  # type: ignore[misc]
     @cached_property
@@ -145,15 +155,14 @@ class BlockAPI(BaseInterfaceModel):
 
     @computed_field()  # type: ignore[misc]
     @cached_property
-    def size(self) -> int:
+    def size(self) -> HexInt:
         """
         The size of the block in gas. Most of the time,
         this field is passed to the model at validation time,
-        but occassionally it is missing (like in `eth_subscribe:newHeads`),
+        but occasionally it is missing (like in `eth_subscribe:newHeads`),
         in which case it gets calculated if and only if the user
         requests it (or during serialization of this model to disk).
         """
-
         if self._size is not None:
             # The size was provided with the rest of the model
             # (normal).

@@ -18,7 +18,7 @@ from ape.cli.choices import (
     output_format_choice,
 )
 from ape.cli.commands import ConnectedProviderCommand
-from ape.cli.paramtype import JSON
+from ape.cli.paramtype import JSON, Noop
 from ape.exceptions import Abort, ProjectError
 from ape.logging import DEFAULT_LOG_LEVEL, ApeLogger, LogLevel, logger
 from ape.utils.basemodel import ManagerAccessMixin
@@ -36,6 +36,10 @@ class ApeCliContextObject(ManagerAccessMixin, dict):
     def __init__(self):
         self.logger = logger
         super().__init__({})
+
+    def __repr__(self) -> str:
+        # Customizing this because otherwise it uses `dict` repr, which is confusing.
+        return f"<{self.__class__.__name__}>"
 
     @staticmethod
     def abort(msg: str, base_error: Optional[Exception] = None) -> NoReturn:
@@ -56,20 +60,41 @@ class ApeCliContextObject(ManagerAccessMixin, dict):
 
 
 def verbosity_option(
-    cli_logger: Optional[ApeLogger] = None, default: Union[str, int, LogLevel] = DEFAULT_LOG_LEVEL
+    cli_logger: Optional[ApeLogger] = None,
+    default: Optional[Union[str, int, LogLevel]] = None,
+    callback: Optional[Callable] = None,
+    **kwargs,
 ) -> Callable:
     """A decorator that adds a `--verbosity, -v` option to the decorated
     command.
+
+    Args:
+        cli_logger (:class:`~ape.logging.ApeLogger` | None): Optionally pass
+          a custom logger object.
+        default (str | int | :class:`~ape.logging.LogLevel`): The default log-level
+          for this command.
+        callback (Callable | None): A callback handler for passed-in verbosity values.
+        **kwargs: Additional click overrides.
+
+    Returns:
+        click option
     """
     _logger = cli_logger or logger
-    kwarguments = _create_verbosity_kwargs(_logger=_logger, default=default)
+    default = logger.level if default is None else default
+    kwarguments = _create_verbosity_kwargs(
+        _logger=_logger, default=default, callback=callback, **kwargs
+    )
     return lambda f: click.option(*_VERBOSITY_VALUES, **kwarguments)(f)
 
 
 def _create_verbosity_kwargs(
-    _logger: Optional[ApeLogger] = None, default: Union[str, int, LogLevel] = DEFAULT_LOG_LEVEL
+    _logger: Optional[ApeLogger] = None,
+    default: Optional[Union[str, int, LogLevel]] = None,
+    callback: Optional[Callable] = None,
+    **kwargs,
 ) -> dict:
-    cli_logger = _logger or logger
+    default = logger.level if default is None else default
+    ape_logger = _logger or logger
 
     def set_level(ctx, param, value):
         if isinstance(value, str):
@@ -77,7 +102,14 @@ def _create_verbosity_kwargs(
             if value.startswith("LOGLEVEL."):
                 value = value.split(".")[-1].strip()
 
-        cli_logger._load_from_sys_argv(default=value)
+        if callback is not None:
+            value = callback(ctx, param, value)
+
+        if ape_logger._did_parse_sys_argv:
+            # Changing mid-session somehow (tests?)
+            ape_logger.set_level(value)
+        else:
+            ape_logger._load_from_sys_argv(default=value)
 
     level_names = [lvl.name for lvl in LogLevel]
     names_str = f"{', '.join(level_names[:-1])}, or {level_names[-1]}"
@@ -88,11 +120,13 @@ def _create_verbosity_kwargs(
         "expose_value": False,
         "help": f"One of {names_str}",
         "is_eager": True,
+        "type": Noop(),
+        **kwargs,
     }
 
 
 def ape_cli_context(
-    default_log_level: Union[str, int, LogLevel] = DEFAULT_LOG_LEVEL,
+    default_log_level: Optional[Union[str, int, LogLevel]] = None,
     obj_type: type = ApeCliContextObject,
 ) -> Callable:
     """
@@ -101,14 +135,18 @@ def ape_cli_context(
     such as logging or accessing managers.
 
     Args:
-        default_log_level (Union[str, int, :class:`~ape.logging.LogLevel`]): The log-level
+        default_log_level (str | int | :class:`~ape.logging.LogLevel` |  None): The log-level
           value to pass to :meth:`~ape.cli.options.verbosity_option`.
         obj_type (Type): The context object type. Defaults to
           :class:`~ape.cli.options.ApeCliContextObject`. Sub-class
           the context to extend its functionality in your CLIs,
           such as if you want to add additional manager classes
           to the context.
+
+    Returns:
+        click option
     """
+    default_log_level = logger.level if default_log_level is None else default_log_level
 
     def decorator(f):
         f = verbosity_option(logger, default=default_log_level)(f)

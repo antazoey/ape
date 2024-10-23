@@ -9,7 +9,8 @@ from rich.table import Table
 from ape.utils import is_evm_precompile, is_zero_hex
 
 if TYPE_CHECKING:
-    from ape.types import ContractFunctionPath, CoverageReport, GasReport
+    from ape.types.coverage import CoverageReport
+    from ape.types.trace import ContractFunctionPath, GasReport
 
 USER_ASSERT_TAG = "USER_ASSERT"
 
@@ -126,6 +127,7 @@ def _parse_coverage_table(coverage: "CoverageReport", statement: bool = True) ->
 
 def _parse_verbose_coverage(coverage: "CoverageReport", statement: bool = True) -> list[Table]:
     tables = []
+    row: tuple[str, ...]
     for project in coverage.projects:
         for src in project.sources:
             for contract in src.contracts:

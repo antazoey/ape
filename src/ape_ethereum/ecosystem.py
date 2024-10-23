@@ -25,8 +25,11 @@ from ethpm_types.abi import ABIType, ConstructorABI, EventABI, MethodABI
 from pydantic import Field, computed_field, field_validator, model_validator
 from pydantic_settings import SettingsConfigDict
 
-from ape.api import BlockAPI, EcosystemAPI, PluginConfig, ReceiptAPI, TraceAPI, TransactionAPI
-from ape.api.networks import LOCAL_NETWORK_NAME
+from ape.api.config import PluginConfig
+from ape.api.networks import EcosystemAPI
+from ape.api.providers import BlockAPI
+from ape.api.trace import TraceAPI
+from ape.api.transactions import ReceiptAPI, TransactionAPI
 from ape.contracts.base import ContractCall
 from ape.exceptions import (
     ApeException,
@@ -39,30 +42,24 @@ from ape.exceptions import (
 )
 from ape.logging import logger
 from ape.managers.config import merge_configs
-from ape.types import (
-    AddressType,
-    AutoGasLimit,
-    ContractLog,
-    CurrencyValueComparable,
-    GasLimit,
-    HexInt,
-    RawAddress,
-    TransactionSignature,
-)
-from ape.utils import (
+from ape.types.address import AddressType, RawAddress
+from ape.types.basic import HexInt
+from ape.types.events import ContractLog
+from ape.types.gas import AutoGasLimit, GasLimit
+from ape.types.signatures import TransactionSignature
+from ape.types.units import CurrencyValueComparable
+from ape.utils.abi import LogInputABICollection, Struct, StructParser, is_array, returns_array
+from ape.utils.basemodel import _assert_not_ipython_check, only_raise_attribute_error
+from ape.utils.misc import (
     DEFAULT_LIVE_NETWORK_BASE_FEE_MULTIPLIER,
     DEFAULT_LOCAL_TRANSACTION_ACCEPTANCE_TIMEOUT,
+    DEFAULT_MAX_RETRIES_TX,
     DEFAULT_TRANSACTION_ACCEPTANCE_TIMEOUT,
+    DEFAULT_TRANSACTION_TYPE,
     EMPTY_BYTES32,
+    LOCAL_NETWORK_NAME,
     ZERO_ADDRESS,
-    LogInputABICollection,
-    Struct,
-    StructParser,
-    is_array,
-    returns_array,
 )
-from ape.utils.basemodel import _assert_not_ipython_check, only_raise_attribute_error
-from ape.utils.misc import DEFAULT_MAX_RETRIES_TX, DEFAULT_TRANSACTION_TYPE
 from ape_ethereum.proxies import (
     IMPLEMENTATION_ABI,
     MASTER_COPY_ABI,
@@ -146,6 +143,12 @@ class NetworkConfig(PluginConfig):
 
     base_fee_multiplier: float = 1.0
     """A multiplier to apply to a transaction base fee."""
+
+    is_mainnet: Optional[bool] = None
+    """
+    Set to ``True`` to declare as a mainnet or ``False`` to ensure
+    it isn't detected as one.
+    """
 
     request_headers: dict = {}
     """Optionally config extra request headers whenever using this network."""
