@@ -121,7 +121,7 @@ vyper = compilers.get_compiler("vyper", settings=settings["vyper"])
 vyper.compile([Path("path/to/contract.vy")])
 
 solidity = compilers.get_compiler("solidity", settings=settings["solidity"])
-vyper.compile([Path("path/to/contract.sol")])
+solidity.compile([Path("path/to/contract.sol")])
 ```
 
 ## Compile Source Code
@@ -161,4 +161,4 @@ compile:
 Then, after compiling, you should notice minified ABI json files in your `.build/abi` folder.
 This is useful if hosting these files on a web-server.
 
-To see the full list of supported output-extra, see [the OutpuExtra enum documentation](../methoddocs/ape_compile.html#ape_compile.OutputExtras).
+To see the full list of supported output-extra, see [the OutputExtras enum documentation](../methoddocs/ape_compile.html#ape_compile.config.OutputExtras).

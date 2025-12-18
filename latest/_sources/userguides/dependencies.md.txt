@@ -24,13 +24,13 @@ The following section highlights how to use each of them and what their differen
 
 You can use dependencies from GitHub.
 For example, a common dependency for Solidity projects is [Open Zeppelin](https://github.com/OpenZeppelin/openzeppelin-contracts).
-To use Open Zeppelin version 4.4.2 in your Ape Solidity project, add the following to your `ape-config.yaml` file:
+To use Open Zeppelin version 4.9.6 in your Ape Solidity project, add the following to your `ape-config.yaml` file:
 
 ```yaml
 dependencies:
   - name: OpenZeppelin
     github: OpenZeppelin/openzeppelin-contracts
-    version: 4.4.2
+    version: 4.9.6
 ```
 
 Then, follow the guide below about `remappings` to use the dependency.
@@ -53,20 +53,52 @@ dependencies:
 ```
 
 The `ref:` config installs the code from that reference; the `version:` config uses the official GitHub release API, and then only if that fails will it check the `git` references.
-Often times, the `v` prefix is required when using tags.
+Oftentimes, the `v` prefix is required when using tags.
 However, if cloning the tag fails, `ape` will retry with a `v` prefix.
 Bypass the original failing attempt by including a `v` in your dependency config.
 
-### Python
+**By knowing if the release is from the version API or only available via tag, and whether the version is v-prefixed or not, you save Ape some time and complexity when installing dependencies.**
 
-You can use dependencies to PyPI by using the `python:` keyed dependency type.
+When using ref, you can also specify the scheme for the `git` tool to use when cloning, such as `https` (default) or `ssh`.
 
 ```yaml
 dependencies:
-   - python: snekmate
+  - name: Uniswap
+    github: Uniswap/v3-core
+    ref: v1.0.0
+    scheme: ssh
+```
+
+### PyPI
+
+You can use dependencies from [PyPI](https://pypi.org/) by using the `pypi:` key.
+
+```yaml
+dependencies:
+   - pypi: snekmate
+     config_override:
+       base_path: src
+       contracts_folder: snekmate
+```
+
+When using the `pypi:` key, dependencies are downloaded and extracted from PyPI using an HTTP requests library.
+
+You can also specify the `site_package:` key for already-installed dependencies:
+
+```yaml
+dependencies:
+   - site_package: snekmate
      config_override:
        contracts_folder: .
 ```
+
+Using `site_package:` requires the package to be installed in your `sys.path` (site-packages) folder, generally via `pip` or some other tool.
+The `contracts_folder` override, in this case, is often needed because the site-package does not have the root source-folder included.
+Additionally, `site_package:` specified dependencies may also be lacking project-configuration files, such as the `ape-config.yaml`.
+Compilers such as `vyper` encourage users to use `pip` to publish and install smart-contract dependencies (other vyper files), but some features in Ape may be limited if the dependency is not also specified in your config somewhere.
+
+If wanting to use a dependency from `PyPI`, we recommend using the `pypi:` key instead of the `site_package:` key.
+However, the `site_package:` key works great if you already used `pip` to install the dependency, especially if the dependency is not available on `PyPI`.
 
 ### Local
 
@@ -125,8 +157,8 @@ ape pm list
 You should see information like:
 
 ```shell
-NAME          VERSION  COMPILED
-openzeppelin  4.9.3    -
+NAME                                 VERSION  INSTALLED  COMPILED
+OpenZeppelin/openzeppelin-contracts  4.9.3    True       False
 ```
 
 ### install
@@ -141,6 +173,12 @@ If the dependencies are already cached and you want to re-install them, use the 
 
 ```shell
 ape pm install --force
+```
+
+To install a specific dependency by ID that is listed in a config file, use the ID or name as the package argument:
+
+```shell
+ape pm install OpenZeppelin/openzeppelin-contracts
 ```
 
 To install a dependency that is not in your config, you can specify it directly along with `--name` and `--version`:
@@ -171,16 +209,20 @@ You can also use Python to install dependencies, using `**kwargs` as the same fi
 from ape import project
 
 project.dependencies.install(
-   github="OpenZeppelin/openzeppelin-contracts", name="openzeppelin", version="4.4.2"
+   github="OpenZeppelin/openzeppelin-contracts", name="openzeppelin", version="4.9.6"
 )
 ```
 
 ### uninstall
 
-Remove previously installed packages using the `uninstall` command:
+Remove previously installed packages using the `uninstall` command, providing it either the dependency's name or package_id:
 
 ```shell
 ape pm uninstall OpenZeppelin
+```
+
+```shell
+ape pm uninstall OpenZeppelin/openzeppelin-contracts
 ```
 
 If there is a single version installed, the command will remove the single version.
@@ -250,7 +292,7 @@ dependencies:
 
 This is the same as if these values were in an `ape-config.yaml` file in the project directly.
 
-You can also specify `--config-override` in the `ape pm install` command to try different settings more adhoc:
+You can also specify `--config-override` in the `ape pm install` command to try different settings more ad hoc:
 
 ```shell
 ape pm install --config-override '{"solidity": {"evm_version": "paris"}}'
@@ -294,7 +336,7 @@ For example, if you are using dependencies like:
 dependencies:
   - name: OpenZeppelin
     github: OpenZeppelin/openzeppelin-contracts
-    version: 4.4.2
+    version: 4.9.6
 ```
 
 And your source files import from `openzeppelin` this way:
