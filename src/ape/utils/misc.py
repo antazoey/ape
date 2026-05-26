@@ -382,11 +382,24 @@ def run_until_complete(*item: Any) -> Any:
         # This happens in some `web3.py` methods.
         return items if len(items) > 1 else items[0]
 
-    # Run all coroutines async.
-    task = gather(*items, return_exceptions=True) if len(items) > 1 else items[0]
-    loop = asyncio.get_event_loop()
-    result = loop.run_until_complete(task)
-    return result
+    if len(items) > 1:
+
+        async def _gather() -> Any:
+            return await gather(*items, return_exceptions=True)
+
+        coro = _gather()
+    else:
+        coro = items[0]
+
+    try:
+        # Prefer an event loop already configured for the current thread.
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        # No event loop is set (e.g. when called from the Ape console).
+        # `asyncio.run` creates a temporary loop and cleans it up afterwards.
+        return asyncio.run(coro)
+
+    return loop.run_until_complete(coro)
 
 
 def nonreentrant(key_fn):

@@ -1,4 +1,5 @@
 import asyncio
+import threading
 
 import pytest
 from eth_pydantic_types import HexBytes
@@ -92,6 +93,34 @@ def test_run_until_complete_multiple_coroutines():
     asyncio.set_event_loop(loop)
     actual = run_until_complete(foo(), bar())
     assert actual == [3, 4]
+
+
+def test_run_until_complete_without_event_loop():
+    """
+    ``run_until_complete`` works even when the calling thread has no event loop
+    configured, e.g. when invoked from the Ape console. It runs on a temporary
+    loop in that case.
+    """
+    results: dict = {}
+
+    def run_in_fresh_thread():
+        # A fresh thread has no event loop set, so `asyncio.get_event_loop()`
+        # raises and `run_until_complete` must fall back to `asyncio.run`.
+        async def foo():
+            return 3
+
+        async def bar():
+            return 4
+
+        results["single"] = run_until_complete(foo())
+        results["multiple"] = run_until_complete(foo(), bar())
+
+    thread = threading.Thread(target=run_in_fresh_thread)
+    thread.start()
+    thread.join()
+
+    assert results["single"] == 3
+    assert results["multiple"] == [3, 4]
 
 
 @pytest.mark.parametrize("addresses", [(f"0x{i}", f"0x{'0' * 39}{i}") for i in range(1, 10)])

@@ -15,6 +15,7 @@ import click
 
 from ape.cli.commands import ConnectedProviderCommand
 from ape.cli.options import ape_cli_context, project_option
+from ape.utils import run_until_complete
 
 if TYPE_CHECKING:
     from IPython.terminal.ipapp import Config as IPythonConfig
@@ -157,11 +158,9 @@ class ApeConsoleNamespace(dict):
         if ape_init_extras is not None:
             func_spec = inspect.getfullargspec(ape_init_extras)
             init_kwargs: dict[str, Any] = {k: self._get_from_ape(k) for k in func_spec.args}
-            extras = ape_init_extras(**init_kwargs)
-            if inspect.iscoroutine(extras):
-                from ape.utils import run_until_complete
 
-                extras = run_until_complete(extras)
+            # `ape_init_extras` is allowed to be a regular or an `async` function.
+            extras = run_until_complete(ape_init_extras(**init_kwargs))
 
             if isinstance(extras, dict):
                 all_extras.update(extras)
